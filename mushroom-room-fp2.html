@@ -279,39 +279,73 @@ const stripMat = new THREE.MeshStandardMaterial({
    6.  MUSHROOM SHADERS
    ============================================================ */
 
-/* ---- cap: crimson core → orange/gold striated margin (uv.v = 1 at rim) ---- */
-function makeCapTexture(){
-  const w = 1024, h = 160;
+/* ---- the cap strip, painted along v across the whole lens cross-section ----
+   v 0            red apex (hangs lowest, faces the floor)
+   v 0-.70        red skin: hot orange-scarlet, heavy low-frequency mottling
+   v .70-.765     skin deepens to crimson approaching the rim
+   v .765-.775    a thin HARD DARK LINE — the crispest edge on the sculpture
+   v .775-.84     pale cream lip
+   v .84-1        gill-side flesh, mauve-tinted (mostly hidden by lamellae)
+   The four-band margin is what the eye actually reads at duck height, and no
+   amount of geometry substitutes for it. */
+function makeCapTexture(seed, crimson = 0){
+  const w = 1024, h = 512;
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const g = c.getContext('2d');
+  const R = mulberry32(seed | 0), rr = (a, b) => a + R() * (b - a);
+  const yFor = v => (1 - v) * h;                 // flipY: canvas top row is v = 1
 
-  g.fillStyle = '#c2401f'; g.fillRect(0, 0, w, h);
+  // young fruit bodies sit deeper/bluer red, mature ones hotter and oranger
+  const base = crimson > 0.5 ? '#b01c15' : '#d32a18';
+  g.fillStyle = base; g.fillRect(0, yFor(0.80), w, h);
 
-  // blotchy pigment variation
-  for (let i = 0; i < 260; i++){
-    const x = rng() * w, y = rng() * h, r = rand(14, 80);
-    const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, rng() > 0.5 ? 'rgba(220,88,40,0.34)' : 'rgba(150,40,20,0.26)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = grad; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill();
+  // low-frequency pigment mottling — the reference red is never flat
+  for (let i = 0; i < 340; i++){
+    const x = R() * w, y = yFor(0.80) + R() * (h - yFor(0.80)), rad = rr(40, 190);
+    const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+    const hot = R() > 0.62;                     // mostly cool: the skin is scarlet, not rust
+    gr.addColorStop(0, hot ? `rgba(236,86,34,${rr(0.08,0.18)})`
+                           : `rgba(146,24,16,${rr(0.10,0.26)})`);
+    gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, rad, 0, 6.2832); g.fill();
+  }
+  // mild orange lift toward the margin
+  const om = g.createLinearGradient(0, yFor(0.70), 0, yFor(0.55));
+  om.addColorStop(0, 'rgba(243,116,34,0.20)');
+  om.addColorStop(1, 'rgba(243,116,34,0.00)');
+  g.fillStyle = om; g.fillRect(0, yFor(0.70), w, yFor(0.55) - yFor(0.70));
+  // crimson deepening right at the rim
+  const dm = g.createLinearGradient(0, yFor(0.765), 0, yFor(0.69));
+  dm.addColorStop(0, 'rgba(138,26,18,0.50)');
+  dm.addColorStop(1, 'rgba(138,26,18,0.00)');
+  g.fillStyle = dm; g.fillRect(0, yFor(0.765), w, yFor(0.69) - yFor(0.765));
+
+  // coarse granular substrate — the reference skin has visible orange-peel tooth
+  for (let i = 0; i < 9000; i++){
+    const x = R() * w, y = yFor(0.80) + R() * (h - yFor(0.80));
+    const up = R() > 0.5;
+    g.fillStyle = up ? `rgba(250,128,58,${rr(0.02,0.07)})` : `rgba(108,16,12,${rr(0.03,0.12)})`;
+    g.fillRect(x, y, rr(1, 3), rr(1, 3));
   }
 
-  // canvas top row = v 1 = the rim/margin: gold wash bleeding inward
-  const grd = g.createLinearGradient(0, 0, 0, h * 0.34);
-  grd.addColorStop(0.00, 'rgba(232,150,62,0.98)');
-  grd.addColorStop(0.35, 'rgba(214,102,44,0.62)');
-  grd.addColorStop(1.00, 'rgba(194,64,31,0.00)');
-  g.fillStyle = grd; g.fillRect(0, 0, w, h * 0.34);
+  // fine hairline striations, marginal zone only
+  for (let i = 0; i < 1400; i++){
+    const x = R() * w, y0 = yFor(0.70);
+    g.strokeStyle = `rgba(122,26,16,${rr(0.04, 0.13)})`;
+    g.lineWidth = rr(0.7, 1.8);
+    g.beginPath(); g.moveTo(x, y0); g.lineTo(x + rr(-2, 2), y0 - rr(0.02, 0.06) * h); g.stroke();
+  }
 
-  // striations in the marginal zone
+  g.fillStyle = '#2a1008'; g.fillRect(0, yFor(0.775), w, yFor(0.765) - yFor(0.775)); // dark line
+  g.fillStyle = '#e8dcc4'; g.fillRect(0, yFor(0.840), w, yFor(0.775) - yFor(0.840)); // cream lip
+  g.fillStyle = '#cfc2c4'; g.fillRect(0, 0, w, yFor(0.840));                          // mauve flesh
+
+  // the lip and flesh are cast plaster, not clean paint
   for (let i = 0; i < 900; i++){
-    const x = (i + rng() * 0.8) / 900 * w;
-    g.strokeStyle = `rgba(255,228,182,${0.06 + rng() * 0.16})`;
-    g.lineWidth = 1.0 + rng() * 1.4;
-    const len = h * (0.10 + rng() * 0.10);
-    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, len); g.stroke();
+    const x = R() * w, y = R() * yFor(0.775);
+    g.fillStyle = `rgba(${R()>0.5?120:250},${R()>0.5?110:242},${R()>0.5?112:228},${rr(0.05,0.22)})`;
+    g.fillRect(x, y, rr(1, 4), rr(1, 3));
   }
-
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
@@ -319,19 +353,28 @@ function makeCapTexture(){
   return t;
 }
 
+const CAP_MATS = [];
+/* A handful of cap variants, so nine caps are not one repeated texture.
+   Matte-to-satin with a weak coat: the reference red is chalky, not glossy. */
+function capMaterial(crimson){
+  const k = (crimson > 0.5 ? 4 : 0) + Math.floor(rng() * 4);
+  if (!CAP_MATS[k]) CAP_MATS[k] = new THREE.MeshPhysicalMaterial({
+    map: makeCapTexture(9001 + k * 7717, crimson), color: 0xffffff,
+    roughness: 0.62, metalness: 0.0, clearcoat: 0.14, clearcoatRoughness: 0.62,
+    side: THREE.DoubleSide
+  });
+  return CAP_MATS[k];
+}
+
 const MAT = {
   /* semi-gloss satin + a faint coat, per the sculpture's finish */
-  cap : new THREE.MeshPhysicalMaterial({
-    map: makeCapTexture(), color: 0xffffff, roughness: 0.42, metalness: 0.0,
-    clearcoat: 0.30, clearcoatRoughness: 0.38, side: THREE.DoubleSide
-  }),
   /* chalky, near-zero specular, warm ivory — the universal-veil warts */
   wart : new THREE.MeshStandardMaterial({ color: 0xefe6d6, roughness: 0.96, metalness: 0, flatShading: true }),
   /* thin, translucent lamellae: a touch of self-illumination fakes the SSS
      glow as the floor light is transmitted through the tissue */
   gill : new THREE.MeshStandardMaterial({
-    color: 0xefe4d2, roughness: 0.74, metalness: 0, side: THREE.DoubleSide,
-    emissive: 0x4a3520, emissiveIntensity: 0.42
+    color: 0xc9b6bb, roughness: 0.78, metalness: 0, side: THREE.DoubleSide,
+    emissive: 0x3d2a30, emissiveIntensity: 0.34
   }),
   stem : new THREE.MeshStandardMaterial({ color: 0xe7e0d3, roughness: 0.88, metalness: 0, side: THREE.DoubleSide }),
   veil : new THREE.MeshStandardMaterial({ color: 0xe9e1d1, roughness: 0.90, metalness: 0, side: THREE.DoubleSide }),
@@ -345,25 +388,70 @@ const MAT = {
        convex red surface faces the floor, the gills face the ceiling.
        Local frame: y = 0 at the ceiling, y = -stemH at the cap rim.
    ============================================================ */
-/* Spherical bowl hanging under the ceiling: rim at y = 0, apex (the lowest
-   point) at y = -H, half-width R.  Direct analogue of cap_geometry() in
-   blender-mushroom-room.py — keep the two in step.
-   Returns the revolve profile plus the sphere parameters the gills, warts
-   and the duck-clearance test all need. */
-function capGeometry(R, H, rings = 22){
-  const y0     = (R * R - H * H) / (2 * H);      // sphere centre, above the rim
-  const Rs     = y0 + H;                         // sphere radius
+/* The pileus is a BICONVEX LENS, not a shell.  Rim at y = 0.
+   The red skin bulges DOWN to -H; the gill-side envelope bulges UP to +T with
+   a flatter, flat-topped profile (reference: crops/E_capedge_05.jpg, where the
+   silhouette gap is widest at the stipe and closes to a knife edge at the rim).
+   The earlier code offset the gill surface a constant distance inside the red
+   bowl, so both faces bulged the same way — the single biggest form error.
+
+   `lens` is one closed profile running red-apex -> margin -> gill-apex, with
+   explicit uvV so the cap texture can paint the four-band margin along v.
+   Direct analogue of cap_geometry() in blender-mushroom-room.py. */
+function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.4){
+  const y0     = (R * R - H * H) / (2 * H);     // sphere centre, above the rim
+  const Rs     = y0 + H;
   const phiMax = Math.atan2(R, y0);
-  const profile = [];
+  const T      = H * gillRise;                  // how far the gill dome rises
+
+  const red = [];                               // apex -> margin
   for (let j = 0; j <= rings; j++){
     const phi = phiMax * (j / rings);
-    profile.push(new THREE.Vector2(Rs * Math.sin(phi), y0 - Rs * Math.cos(phi)));
+    red.push(new THREE.Vector2(Rs * Math.sin(phi), y0 - Rs * Math.cos(phi)));
   }
-  // rolled rim
-  const rimT = Math.max(0.035, R * 0.020);
-  profile.push(new THREE.Vector2(R * 0.988, rimT * 0.55));
-  profile.push(new THREE.Vector2(R * 0.912, rimT * 1.25));
-  return { profile, y0, Rs, phiMax };
+  const gillY = t => T * (1 - Math.pow(t, gillFlat));
+  const gill = [];                              // margin -> apex
+  for (let j = rings; j >= 0; j--) gill.push(new THREE.Vector2(R * (j / rings), gillY(j / rings)));
+
+  // closed lens: drop the shared margin point from each face, bridge with a rim roll
+  const lipH = Math.max(0.012, R * 0.014);
+  const lens = red.slice(0, rings).concat([
+    new THREE.Vector2(R * 0.998, -lipH * 0.45),
+    new THREE.Vector2(R,          0),
+    new THREE.Vector2(R * 0.998,  lipH * 0.45)
+  ], gill.slice(1));
+
+  /* v bands: 0-.70 red skin | .70-.80 the rim roll | .80-1 gill-side flesh */
+  const uvV = [];
+  let arc = 0; const redLen = [];
+  for (let j = 0; j < rings; j++){
+    if (j) arc += red[j].distanceTo(red[j - 1]);
+    redLen.push(arc);
+  }
+  const redTot = redLen[redLen.length - 1] || 1;
+  redLen.forEach(a => uvV.push(0.70 * a / redTot));
+  uvV.push(0.725, 0.765, 0.805);
+  for (let j = 1; j <= rings; j++) uvV.push(0.82 + 0.18 * ((j - 1) / (rings - 1)));
+
+  return { lens, uvV, red, gill, gillY, y0, Rs, phiMax, T };
+}
+
+/* Break the surface of revolution.  A perfectly circular rim is the loudest
+   tell that a cap was revolved; every cap in the photographs is lobed and its
+   margin rises and falls.  Weighted by (r/R)^1.5 so the stipe attachment at the
+   centre stays put and the margin moves most. */
+function shapeCap(geo, R, lobe, undulate){
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++){
+    const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
+    const rr = Math.hypot(px, pz); if (rr < 1e-5) continue;
+    const th = Math.atan2(px, pz);
+    const w  = Math.pow(clamp(rr / R, 0, 1), 1.5);
+    const sc = 1 + (lobe(th) - 1) * w;
+    p.setX(i, px * sc); p.setZ(i, pz * sc);
+    p.setY(i, py + undulate(th) * w);
+  }
+  geo.computeVertexNormals();
 }
 
 const WART_GEO = (() => {                       // low-poly polygonal chunk
@@ -373,7 +461,8 @@ const WART_GEO = (() => {                       // low-poly polygonal chunk
 })();
 
 function makeMushroom(cfg){
-  const { x, z, capR, capH, stemH, stemR, bend = 0, tiltX = 0, tiltZ = 0 } = cfg;
+  const { x, z, capR, capH, stemH, stemR, bend = 0, tiltX = 0, tiltZ = 0,
+          gillRise = 0.48 } = cfg;
   const grp = new THREE.Group();
   grp.position.set(x, ROOM.h, z);
   grp.rotation.set(tiltX, rand(0, Math.PI * 2), tiltZ);
@@ -381,8 +470,14 @@ function makeMushroom(cfg){
   const phase = rand(0, 20);
   const rimY  = -stemH;
 
-  /* --- spherical bowl parameters (rim at 0, apex at -capH) --- */
-  const { y0, Rs, phiMax } = capGeometry(capR, capH);
+  /* --- per-specimen margin identity: no two caps share an outline --- */
+  const LOBES  = 12 + Math.floor(rng() * 4);            // 12-15 lobes
+  const lobeA  = 0.030 + rng() * 0.020;                 // 3-5% of the radius
+  const lobePh = rand(0, Math.PI * 2), undPh = rand(0, Math.PI * 2);
+  const lobe = th => 1 + lobeA * Math.sin(th * LOBES + lobePh)
+                       + 0.40 * lobeA * noise2(th * 2.2, 0, phase);
+  const undulate = th => capR * 0.055 * lobeA / 0.04
+                       * Math.sin(th * LOBES * 0.5 + undPh);
 
   /* --- stipe: curved, fibrous, swollen volva at the ceiling --- */
   const NS = Math.max(16, Math.round(34 * Q));
@@ -413,24 +508,23 @@ function makeMushroom(cfg){
   }
   const capOffset = new THREE.Vector3(bend, 0, bend * 0.35);
 
-  /* --- pileus --- */
+  /* --- pileus: one closed biconvex lens --- */
   const capSegs = clamp(Math.round(capR * 340 * Q), 128, 880);
-  const capProfile = capGeometry(capR, capH, 22).profile;
-  const capGeo = revolve(capProfile, capSegs);
+  const CG = capGeometry(capR, capH, 22, gillRise);
+  const capGeo = revolve(CG.lens, capSegs, CG.uvV);
+  shapeCap(capGeo, capR, lobe, undulate);
+  const { y0, Rs, phiMax } = CG;      // the red underside still drives clearance
 
-  /* --- hymenium: radial lamellae with alternating LAMELLULAE ------------
-     Every second gill is a short one; it fades out before reaching the
-     stipe, exactly as in the reference material.                        */
-  const gOff   = 0.030 + capR * 0.007;
-  const rIn    = Math.max(0.045, stemR * 1.02);
-  const phiIn  = Math.asin(Math.min(0.999, rIn / Rs));
-  const NG     = Math.max(12, Math.round(18 * Q));
-  const gProf  = [];
+  /* --- hymenium: rides the gill-side dome, NOT an offset of the red bowl.
+     Still the Phase-1 corrugated surface; Phase 5 replaces it with blades. --- */
+  const rIn   = Math.max(0.045, stemR * 1.02);
+  const tIn   = clamp(rIn / capR, 0.04, 0.5);
+  const gInset = 0.012 + capR * 0.010;            // sits just under the flesh
+  const NG    = Math.max(14, Math.round(22 * Q));
+  const gProf = [];
   for (let j = 0; j <= NG; j++){
-    const phi = phiIn + (phiMax - phiIn) * (j / NG);
-    const r = Rs * Math.sin(phi), y = y0 - Rs * Math.cos(phi);
-    const nx = Math.sin(phi), ny = -Math.cos(phi);
-    gProf.push(new THREE.Vector2(r - nx * gOff, y - ny * gOff));
+    const t = tIn + (0.965 - tIn) * (j / NG);     // stop short so the lip shows
+    gProf.push(new THREE.Vector2(capR * t, CG.gillY(t) - gInset));
   }
   const gillGeo = revolve(gProf, capSegs);
   const FINS = Math.max(60, Math.round(capSegs / 3));
@@ -443,12 +537,13 @@ function makeMushroom(cfg){
       const th = Math.atan2(px, pz);
       const finIndex = Math.floor(((th / (Math.PI * 2)) % 1 + 1) % 1 * FINS);
       const isLong   = (finIndex % 2) === 0;
-      // short gills stop short of the stipe
       const fade = isLong ? 1 : clamp((rr - rIn) / ((capR - rIn) * 0.36), 0, 1);
       const d = amp * (isLong ? 1 : 0.62) * fade * Math.sin(th * FINS);
-      p.setX(i, px + d * px / rr);
-      p.setZ(i, pz + d * pz / rr);
-      p.setY(i, py + d * 0.30);
+      const L = lobe(th), w = Math.pow(clamp(rr / capR, 0, 1), 1.5);
+      const sc = 1 + (L - 1) * w;
+      p.setX(i, (px + d * px / rr) * sc);
+      p.setZ(i, (pz + d * pz / rr) * sc);
+      p.setY(i, py + d * 0.30 + undulate(th) * w);
     }
     gillGeo.computeVertexNormals();
   }
@@ -516,7 +611,7 @@ function makeMushroom(cfg){
 
   /* --- assemble (cap + gills ride the stipe's curvature) --- */
   const stemMesh   = new THREE.Mesh(stemGeo, MAT.stem);
-  const capMesh    = new THREE.Mesh(capGeo, MAT.cap);
+  const capMesh    = new THREE.Mesh(capGeo, capMaterial(cfg.crimson || 0));
   const gillMesh   = new THREE.Mesh(gillGeo, MAT.gill);
   const collarMesh = new THREE.Mesh(collarGeo, MAT.volva);
   capMesh.position.copy(capOffset);  capMesh.position.y  += rimY;
@@ -550,11 +645,15 @@ function makeMushroom(cfg){
        Four developmental stages.  Buttons stay tucked near the
        ceiling; mature cap rims hang at ~1.6 m and the apex at ~1.0 m.
    ============================================================ */
+/* h = red-skin depth as a fraction of capR; gr = how far the gill dome rises
+   as a fraction of that depth.  Total thickness / width for `mature` is
+   (0.30 + 0.30*0.45) / 2 = 22%, against ~33% before — the earlier caps were
+   half again too fat for their width (reference: crops/E_capedge_05.jpg). */
 const S = {                                     // stage → proportions
-  button        : { h: 1.10, r: 0.30 },
-  hemispherical : { h: 0.62, r: 0.26 },
-  convex        : { h: 0.46, r: 0.27 },
-  mature        : { h: 0.42, r: 0.29 }
+  button        : { h: 1.10, r: 0.30, gr: 0.85, crimson: 1 },
+  hemispherical : { h: 0.62, r: 0.26, gr: 0.62, crimson: 1 },
+  convex        : { h: 0.40, r: 0.27, gr: 0.52, crimson: 0 },
+  mature        : { h: 0.30, r: 0.29, gr: 0.45, crimson: 0 }
 };
 
 const PLAN = [
@@ -577,6 +676,8 @@ PLAN.forEach(([x, z, capR, stemH, stage, bend, tiltX, tiltZ]) => {
   const m = makeMushroom({
     x, z, capR, stemH, stemR: capR * st.r,
     capH: capR * st.h * rand(0.94, 1.06),
+    gillRise: st.gr * rand(0.92, 1.08),
+    crimson: st.crimson,
     bend, tiltX, tiltZ
   });
   scene.add(m.group);

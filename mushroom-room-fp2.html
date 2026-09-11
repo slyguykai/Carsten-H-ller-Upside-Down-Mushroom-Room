@@ -105,6 +105,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 
 /* ============================================================
    0.  DEVICE / QUALITY            (reference: Fondazione Prada
@@ -188,11 +189,16 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
+/* The key is at floor level, so every shadow in this room is thrown UPWARD
+   onto the ceiling and walls.  That inverted shadow direction is a large part
+   of the installation's character and is worth the shadow-map cost. */
+renderer.shadowMap.enabled = !IS_TOUCH;      // no casters on touch — don't compile the permutation
+renderer.shadowMap.type = THREE.VSMShadowMap; // the only type where shadow.radius actually blurs
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xdfe0dd);
-scene.fog = new THREE.FogExp2(0xe8e6e1, 0.014);
+scene.fog = new THREE.FogExp2(0xf0ded4, 0.014);   // warm floor-bounce, not neutral haze
 
 const HFOV = 74;                                 // ≈24 mm on a 36 mm sensor
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.04, 90);
@@ -224,17 +230,20 @@ const M_FLOOR  = new THREE.MeshStandardMaterial({ color: 0xf3f1ec, roughness: 0.
 
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.d), M_FLOOR);
 floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
 scene.add(floor);
 
 const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.d), M_CEIL);
 ceiling.rotation.x = Math.PI / 2;
 ceiling.position.y = ROOM.h;
+ceiling.receiveShadow = true;                 // catches the upward shadows
 scene.add(ceiling);
 
 function wall(x, z, ry, span){
   const m = new THREE.Mesh(new THREE.PlaneGeometry(span, ROOM.h), M_WALL);
   m.position.set(x, ROOM.h / 2, z);
   m.rotation.y = ry;
+  m.receiveShadow = true;
   scene.add(m);
 }
 wall(0, -ROOM.d/2, 0, ROOM.w);
@@ -336,6 +345,27 @@ const MAT = {
        convex red surface faces the floor, the gills face the ceiling.
        Local frame: y = 0 at the ceiling, y = -stemH at the cap rim.
    ============================================================ */
+/* Spherical bowl hanging under the ceiling: rim at y = 0, apex (the lowest
+   point) at y = -H, half-width R.  Direct analogue of cap_geometry() in
+   blender-mushroom-room.py — keep the two in step.
+   Returns the revolve profile plus the sphere parameters the gills, warts
+   and the duck-clearance test all need. */
+function capGeometry(R, H, rings = 22){
+  const y0     = (R * R - H * H) / (2 * H);      // sphere centre, above the rim
+  const Rs     = y0 + H;                         // sphere radius
+  const phiMax = Math.atan2(R, y0);
+  const profile = [];
+  for (let j = 0; j <= rings; j++){
+    const phi = phiMax * (j / rings);
+    profile.push(new THREE.Vector2(Rs * Math.sin(phi), y0 - Rs * Math.cos(phi)));
+  }
+  // rolled rim
+  const rimT = Math.max(0.035, R * 0.020);
+  profile.push(new THREE.Vector2(R * 0.988, rimT * 0.55));
+  profile.push(new THREE.Vector2(R * 0.912, rimT * 1.25));
+  return { profile, y0, Rs, phiMax };
+}
+
 const WART_GEO = (() => {                       // low-poly polygonal chunk
   const g = new THREE.ConeGeometry(1, 1, 5, 1);
   g.translate(0, 0.5, 0);                       // base sits on y = 0
@@ -352,9 +382,7 @@ function makeMushroom(cfg){
   const rimY  = -stemH;
 
   /* --- spherical bowl parameters (rim at 0, apex at -capH) --- */
-  const y0     = (capR * capR - capH * capH) / (2 * capH);
-  const Rs     = y0 + capH;
-  const phiMax = Math.atan2(capR, y0);
+  const { y0, Rs, phiMax } = capGeometry(capR, capH);
 
   /* --- stipe: curved, fibrous, swollen volva at the ceiling --- */
   const NS = Math.max(16, Math.round(34 * Q));
@@ -385,17 +413,9 @@ function makeMushroom(cfg){
   }
   const capOffset = new THREE.Vector3(bend, 0, bend * 0.35);
 
-  /* --- pileus (a thin bowl, solid enough to read an edge at the rim) --- */
+  /* --- pileus --- */
   const capSegs = clamp(Math.round(capR * 340 * Q), 128, 880);
-  const NR = 22;
-  const capProfile = [];
-  for (let j = 0; j <= NR; j++){
-    const phi = phiMax * (j / NR);
-    capProfile.push(new THREE.Vector2(Rs * Math.sin(phi), y0 - Rs * Math.cos(phi)));
-  }
-  const rimT = Math.max(0.035, capR * 0.020);
-  capProfile.push(new THREE.Vector2(capR * 0.988, rimT * 0.55));
-  capProfile.push(new THREE.Vector2(capR * 0.912, rimT * 1.25));
+  const capProfile = capGeometry(capR, capH, 22).profile;
   const capGeo = revolve(capProfile, capSegs);
 
   /* --- hymenium: radial lamellae with alternating LAMELLULAE ------------
@@ -425,9 +445,7 @@ function makeMushroom(cfg){
       const isLong   = (finIndex % 2) === 0;
       // short gills stop short of the stipe
       const fade = isLong ? 1 : clamp((rr - rIn) / ((capR - rIn) * 0.36), 0, 1);
-      const a = amp * (isLong ? 1 : 0.62) * fade * Math.sin((th * FINS / FINS) * Math.PI * 2 * FINS / FINS + finIndex * 0);
-      const wave = Math.sin(th * FINS) ;
-      const d = a === 0 ? 0 : amp * (isLong ? 1 : 0.62) * fade * wave;
+      const d = amp * (isLong ? 1 : 0.62) * fade * Math.sin(th * FINS);
       p.setX(i, px + d * px / rr);
       p.setZ(i, pz + d * pz / rr);
       p.setY(i, py + d * 0.30);
@@ -510,6 +528,9 @@ function makeMushroom(cfg){
     veil.position.copy(capOffset);
     grp.add(veil);
   }
+  grp.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+  // warts are 1-3 cm on a 2048 map spanning ~10 m — unresolvable. GTAO seats them instead.
+  warts.castShadow = false;
 
   const rimWorld = ROOM.h - stemH;
 
@@ -573,6 +594,7 @@ function makeFigure(h, x, z, ry){
                [0.20,1.12],[0.15,1.24],[0.11,1.32],[0.10,1.40],[0.085,1.46],
                [0.075,1.52],[0.03,1.56]];
   const body = new THREE.Mesh(revolve(pts.map(([r,y]) => new THREE.Vector2(r*k, y*k)), 22), MAT.body);
+  body.castShadow = true; body.receiveShadow = true;
   g.add(body);
   scene.add(g);
 }
@@ -597,14 +619,45 @@ SLITS_X.forEach((x, i) => {
 const f1 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f1.position.set(-1.6, 1.1, 0); scene.add(f1);
 const f2 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f2.position.set( 3.4, 1.1, 0); scene.add(f2);
 
+/* Shadow key.  Point-light shadows cost six faces each, so the casting is
+   carried by two wide, heavily-penumbra'd spots aimed straight UP out of the
+   floor — the cheapest way to get the installation's inverted shadows onto
+   the ceiling.  The point lights above stay shadowless and do the shaping. */
+if (!IS_TOUCH){
+  [-5.0, 0.0, 5.0].forEach(sx => {
+    const sp = new THREE.SpotLight(0xfff6ec, 26, 11, 0.85, 0.6, 2);
+    sp.position.set(sx, 0.06, 0);
+    sp.target.position.set(sx, ROOM.h, 0);
+    sp.castShadow = true;
+    sp.shadow.mapSize.set(2048, 2048);
+    sp.shadow.camera.near = 0.5;
+    sp.shadow.camera.far  = ROOM.h + 1;
+    sp.shadow.bias = -0.0012;
+    sp.shadow.normalBias = 0.012;   // was 2 cm — the size of the wart relief itself
+    sp.shadow.radius = 8;           // VSM blur: this is what makes the edges soft
+    sp.shadow.blurSamples = 16;
+    scene.add(sp, sp.target);
+  });
+}
+
 /* ============================================================
    10.  POST
    ============================================================ */
-let composer = null, bloomPass = null;
+let composer = null, bloomPass = null, aoPass = null;
 if (USE_BLOOM){
   try {
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
+    /* AO does more for the gills and the wart bases than any amount of extra
+       geometry — the pleat valleys have almost no other occlusion cue. */
+    try {
+      const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
+      gtao.output = GTAOPass.OUTPUT.Default;
+      gtao.updateGtaoMaterial({ radius: 0.11, distanceExponent: 1.7, thickness: 0.35,
+                                scale: 1.0, samples: 16, screenSpaceRadius: false });
+      composer.addPass(gtao);
+      aoPass = gtao;
+    } catch(e){ /* addon shape varies by build; AO is optional */ }
     bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.38, 0.70, 0.86);
     composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
@@ -761,7 +814,7 @@ function updatePlayer(dt){
   for (const dm of domes) maxHead = Math.min(maxHead, clearanceUnder(dm, player.pos.x, player.pos.z));
 
   const wantDuck = keys['KeyC'] || keys['ControlLeft'] || keys['ControlRight'] ||
-                   keys['KeyX'] || keys['ShiftRight'] || duckTouch;
+                   keys['KeyX'] || duckTouch;
   const target = Math.min(wantDuck ? EYE_DUCK : EYE_STAND, maxHead - 0.07);
   player.eye += (clamp(target, 0.55, EYE_STAND) - player.eye) * Math.min(1, 8 * dt);
   const ducking = player.eye < EYE_STAND - 0.06;
@@ -831,6 +884,7 @@ addEventListener('resize', () => {
   applyFov();
   renderer.setSize(w, h);
   if (composer) composer.setSize(w, h);
+  if (aoPass && aoPass.setSize) aoPass.setSize(w, h);
   if (bloomPass) bloomPass.resolution.set(w, h);
 });
 

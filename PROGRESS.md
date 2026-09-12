@@ -127,6 +127,36 @@ baking it breaks the moment Phase 6 changes the lighting.
 
 Budget: gill triangles 131,384 -> 88,600; scene 532,966 -> 490,182.
 
+## Phase 6 done — the room (West Village, per the user's direction)
+
+A **deliberate departure from the Fondazione Prada reference**, chosen by the user:
+
+| | Prada reference | built |
+| --- | --- | --- |
+| floor | warm terracotta, satin | pale wide-plank oak, canvas-painted grain and butt joints |
+| walls | warm pink-white | warm gallery white + painted baseboard |
+| ceiling | slate blue-grey | plain white |
+| luminaires | recessed troughs, two tubes | same — kept, they are the key light |
+
+**The white ceiling is also the more physically honest choice.** With the key at floor level a
+white ceiling renders as a dim cool grey on its own; the Prada slate was partly the lighting,
+and painting it grey would double-count. Same principle as the gill albedo.
+
+- Floor is a `THREE.Shape` with the wells punched out as holes, so the troughs are real
+  recesses rather than decals on the boards.
+- Each well is a splayed white reflector box with two emissive tubes, plus a **`RectAreaLight`**
+  — which is what a recessed trough physically is, and unlike a point light it throws the
+  elongated specular streak a satin floor should show. Needs
+  `RectAreaLightUniformsLib.init()` or it silently does nothing. It cannot cast shadows, which
+  costs nothing here because casting was already routed through the upward spots.
+- Lighting rebalanced for the new albedos: exposure 0.54, hemisphere 0.18, env 0.14.
+
+**Known trade-off of going West Village:** the pale gills had good contrast against Prada's
+slate ceiling and have less against white, and the warm terracotta bounce that tinted the
+whole reference palette is gone. The room reads brighter and cooler than the photographs. That
+is the look the user asked for, not a defect — but if it ever feels too clinical, the levers
+are ceiling albedo and the `RectAreaLight` colour temperature, not the mushroom materials.
+
 ## Then
 ## Direction from the user (2026-09-12)
 

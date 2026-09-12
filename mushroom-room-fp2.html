@@ -106,6 +106,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 
 /* ============================================================
    0.  DEVICE / QUALITY            (reference: Fondazione Prada
@@ -202,7 +203,7 @@ try {
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.55;
+renderer.toneMappingExposure = 0.54;
 /* The key is at floor level, so every shadow in this room is thrown UPWARD
    onto the ceiling and walls.  That inverted shadow direction is a large part
    of the installation's character and is worth the shadow-map cost. */
@@ -231,21 +232,97 @@ try {
   pmrem.compileEquirectangularShader();
   scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
   pmrem.dispose();
-  if ('environmentIntensity' in scene) scene.environmentIntensity = 0.22;
+  if ('environmentIntensity' in scene) scene.environmentIntensity = 0.14;
 } catch(e){ /* non fatal */ }
 
 /* ============================================================
-   4.  ROOM SHELL
-       walls: matte white plaster · ceiling: desaturated blue-grey slate
+   4.  ROOM SHELL  —  West Village gallery
+       Warm gallery white, wide-plank pale oak, plain painted ceiling.
+       A deliberate departure from Fondazione Prada's terracotta floor and
+       slate soffit.  Note the ceiling is WHITE here, not painted grey: the
+       key is at floor level, so a white ceiling renders as a dim cool grey
+       on its own.  Baking the grey into albedo would double-count it.
    ============================================================ */
-const M_WALL   = new THREE.MeshStandardMaterial({ color: 0xefede7, roughness: 0.96, metalness: 0 });
-const M_CEIL   = new THREE.MeshStandardMaterial({ color: 0x8d979f, roughness: 1.0,  metalness: 0 }); // slate
-const M_FLOOR  = new THREE.MeshStandardMaterial({ color: 0xf3f1ec, roughness: 0.30, metalness: 0 }); // polished
+function makeFloorTexture(){
+  const w = 1024, h = 1024, PLANK = 132;          // ~19 cm planks across 7 m
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  const R = mulberry32(4242), rr = (a2, b2) => a2 + R() * (b2 - a2);
+  g.fillStyle = '#d8cdb8'; g.fillRect(0, 0, w, h);
+  for (let y = 0; y < h; y += PLANK){
+    // per-plank tone: old floors are never one colour
+    const t = rr(-12, 12);
+    g.fillStyle = `rgb(${216 + t},${205 + t},${184 + t})`;
+    g.fillRect(0, y, w, PLANK);
+    // grain
+    for (let i = 0; i < 150; i++){
+      const gy = y + rr(2, PLANK - 2);
+      g.strokeStyle = `rgba(150,128,98,${rr(0.03, 0.13)})`;
+      g.lineWidth = rr(0.5, 1.8);
+      g.beginPath();
+      let x = 0; g.moveTo(0, gy);
+      while (x < w){ x += rr(60, 200); g.lineTo(x, gy + rr(-2.5, 2.5)); }
+      g.stroke();
+    }
+    // butt joints, staggered
+    let x = rr(0, 380);
+    while (x < w){
+      g.strokeStyle = 'rgba(120,100,76,0.55)'; g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(x, y + 1); g.lineTo(x, y + PLANK - 1); g.stroke();
+      x += rr(260, 520);
+    }
+    g.strokeStyle = 'rgba(116,96,72,0.62)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(2, 1);
+  t.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+  return t;
+}
 
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.d), M_FLOOR);
-floor.rotation.x = -Math.PI / 2;
-floor.receiveShadow = true;
-scene.add(floor);
+const M_WALL  = new THREE.MeshStandardMaterial({ color: 0xf1eee8, roughness: 0.94, metalness: 0 });
+const M_CEIL  = new THREE.MeshStandardMaterial({ color: 0xf4f2ed, roughness: 0.97, metalness: 0 });
+const M_TRIM  = new THREE.MeshStandardMaterial({ color: 0xf7f5f1, roughness: 0.62, metalness: 0 });
+const M_FLOOR = new THREE.MeshStandardMaterial({
+  map: makeFloorTexture(), color: 0xffffff, roughness: 0.42, metalness: 0
+});
+
+/* ============================================================
+   5.  FLOOR LUMINAIRES
+       Recessed wells with splayed white reflectors and two tubes each,
+       long axis running with the room, in a grid — per the reference,
+       which shows troughs, not flush emissive strips.
+   ============================================================ */
+const WELL = { w: 1.25, d: 0.30, depth: 0.10 };    // w along x, d across z
+const WELLS = [];
+for (const z of [-1.65, 1.65])
+  for (let i = 0; i < 5; i++) WELLS.push({ x: -5.4 + i * 2.7, z });
+
+/* Floor as a Shape with the wells punched out, so the troughs read as real
+   recesses rather than decals sitting on top of the boards. */
+{
+  const hw = ROOM.w / 2, hd = ROOM.d / 2;
+  const shape = new THREE.Shape();
+  shape.moveTo(-hw, -hd); shape.lineTo(hw, -hd); shape.lineTo(hw, hd);
+  shape.lineTo(-hw, hd); shape.lineTo(-hw, -hd);
+  WELLS.forEach(o => {
+    const p2 = new THREE.Path();
+    const x0 = o.x - WELL.w / 2, x1 = o.x + WELL.w / 2;
+    const y0 = o.z - WELL.d / 2, y1 = o.z + WELL.d / 2;
+    p2.moveTo(x0, y0); p2.lineTo(x0, y1); p2.lineTo(x1, y1); p2.lineTo(x1, y0); p2.lineTo(x0, y0);
+    shape.holes.push(p2);
+  });
+  const fg = new THREE.ShapeGeometry(shape);
+  // ShapeGeometry uvs are in world metres; scale them into texture space
+  const uv = fg.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 3.2, uv.getY(i) / 3.2);
+  const floor = new THREE.Mesh(fg, M_FLOOR);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+}
 
 const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.d), M_CEIL);
 ceiling.rotation.x = Math.PI / 2;
@@ -259,35 +336,57 @@ function wall(x, z, ry, span){
   m.rotation.y = ry;
   m.receiveShadow = true;
   scene.add(m);
+  // painted baseboard — a townhouse-gallery tell, and it catches the floor light
+  const bh = 0.14, bt = 0.025;
+  const b = new THREE.Mesh(new THREE.BoxGeometry(span, bh, bt), M_TRIM);
+  b.position.set(x, bh / 2, z);
+  b.translateZ(bt / 2);
+  b.rotation.y = ry;
+  b.position.x += Math.sin(ry) * 0; // keep authoring simple; offset applied below
+  b.receiveShadow = true;
+  const n = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
+  b.position.add(n.multiplyScalar(bt / 2));
+  scene.add(b);
 }
 wall(0, -ROOM.d/2, 0, ROOM.w);
 wall(0,  ROOM.d/2, Math.PI, ROOM.w);
 wall(-ROOM.w/2, 0,  Math.PI/2, ROOM.d);
 wall( ROOM.w/2, 0, -Math.PI/2, ROOM.d);
 
-/* ============================================================
-   5.  FLOOR LUMINAIRE SLITS
-       11 flush transverse slots (0.16 × 2.60 m) set perpendicular to
-       the room's length, leaving a clean border of floor each side.
-       These are the PRIMARY KEY of the whole installation.
-   ============================================================ */
-const SLITS_X = [];
-const stripMat = new THREE.MeshStandardMaterial({
-  color: 0xffffff, emissive: 0xfff6ea, emissiveIntensity: 3.1, roughness: 1, metalness: 0
+/* the wells themselves: splayed reflector box + two tubes */
+const M_REFLECT = new THREE.MeshStandardMaterial({
+  color: 0xffffff, roughness: 0.86, metalness: 0, emissive: 0xfff3e2, emissiveIntensity: 0.26,
+  side: THREE.DoubleSide
 });
-{
-  const g = new THREE.PlaneGeometry(0.16, 2.60);   // x narrow, z long → transverse
-  const n = 11;
-  for (let i = 0; i < n; i++){
-    const x = -5.5 + i * 1.1;
-    SLITS_X.push(x);
-    const s = new THREE.Mesh(g, stripMat);
-    s.rotation.x = -Math.PI / 2;
-    s.rotation.z = Math.PI / 2;                       // long axis across the width
-    s.position.set(x, 0.008, 0);
-    scene.add(s);
+const M_TUBE = new THREE.MeshStandardMaterial({
+  color: 0xffffff, emissive: 0xfff6ea, emissiveIntensity: 3.4, roughness: 1, metalness: 0
+});
+WELLS.forEach(o => {
+  const hwx = WELL.w / 2, hwz = WELL.d / 2, D = WELL.depth, k = 0.70; // splay
+  const yT = -0.002, yB = -D;
+  const T = [[-hwx, hwz], [hwx, hwz], [hwx, -hwz], [-hwx, -hwz]];
+  const B = T.map(([px, pz]) => [px * k, pz * k]);
+  const v = [], idx = [];
+  T.forEach(([px, pz]) => v.push(o.x + px, yT, o.z + pz));
+  B.forEach(([px, pz]) => v.push(o.x + px, yB, o.z + pz));
+  for (let i = 0; i < 4; i++){
+    const j = (i + 1) % 4;
+    idx.push(i, j, 4 + j, i, 4 + j, 4 + i);        // splayed side
   }
-}
+  idx.push(4, 5, 6, 4, 6, 7);                      // base
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  wg.setIndex(idx); wg.computeVertexNormals();
+  scene.add(new THREE.Mesh(wg, M_REFLECT));
+
+  const tube = new THREE.CylinderGeometry(0.026, 0.026, WELL.w * 0.86, 8, 1);
+  tube.rotateZ(Math.PI / 2);
+  [-1, 1].forEach(sgn => {
+    const m = new THREE.Mesh(tube, M_TUBE);
+    m.position.set(o.x, -D * 0.42, o.z + sgn * WELL.d * 0.22);
+    scene.add(m);
+  });
+});
 
 /* ============================================================
    6.  MUSHROOM SHADERS
@@ -1019,26 +1118,33 @@ makeFigure(1.78,  2.1,  0.62, -2.5);
        Cool-neutral white (≈4800 K) rises from the slits; the ceilings
        catch only soft bounce, so the tops of the caps sit in shadow.
    ============================================================ */
-const hemi = new THREE.HemisphereLight(0x7f8b95, 0xfff3e2, 0.50);   // dark cool above, warm bounce below
+/* A RectAreaLight is what a recessed trough physically IS, and unlike a point
+   light it throws the elongated specular streak a satin floor should show.
+   It cannot cast shadows — which costs nothing here, because the casting was
+   already routed through the separate upward spots below. */
+RectAreaLightUniformsLib.init();
+
+const hemi = new THREE.HemisphereLight(0xdfe4ea, 0xfff1dc, 0.18);
 scene.add(hemi);
 
-SLITS_X.forEach((x, i) => {
-  if (i % 2) return;                                  // one light per pair of slits
-  const l = new THREE.PointLight(0xfff6ec, 10, 9.5, 2);
-  l.position.set(x, 0.28, 0);
+WELLS.forEach(o => {
+  const l = new THREE.RectAreaLight(0xfff4e6, IS_TOUCH ? 6.5 : 9.0, WELL.w, WELL.d);
+  l.position.set(o.x, 0.02, o.z);
+  l.rotation.x = -Math.PI / 2;                 // face straight up
   scene.add(l);
 });
-// two soft wide fills so distant caps are not pitch black
-const f1 = new THREE.PointLight(0xfff2e2, 6, 13, 2); f1.position.set(-1.6, 1.1, 0); scene.add(f1);
-const f2 = new THREE.PointLight(0xfff2e2, 6, 13, 2); f2.position.set( 3.4, 1.1, 0); scene.add(f2);
+
+// a little wide fill so the far end of the room is not a black hole
+const f1 = new THREE.PointLight(0xfff2e2, 3.2, 13, 2); f1.position.set(-3.2, 0.9, 0); scene.add(f1);
+const f2 = new THREE.PointLight(0xfff2e2, 3.2, 13, 2); f2.position.set( 3.4, 0.9, 0); scene.add(f2);
 
 /* Shadow key.  Point-light shadows cost six faces each, so the casting is
-   carried by two wide, heavily-penumbra'd spots aimed straight UP out of the
+   carried by three wide, heavily-penumbra'd spots aimed straight UP out of the
    floor — the cheapest way to get the installation's inverted shadows onto
-   the ceiling.  The point lights above stay shadowless and do the shaping. */
+   the ceiling. */
 if (!IS_TOUCH){
   [-5.0, 0.0, 5.0].forEach(sx => {
-    const sp = new THREE.SpotLight(0xfff6ec, 8, 11, 0.85, 0.6, 2);
+    const sp = new THREE.SpotLight(0xfff6ec, 6.5, 11, 0.85, 0.6, 2);
     sp.position.set(sx, 0.06, 0);
     sp.target.position.set(sx, ROOM.h, 0);
     sp.castShadow = true;
@@ -1046,8 +1152,8 @@ if (!IS_TOUCH){
     sp.shadow.camera.near = 0.5;
     sp.shadow.camera.far  = ROOM.h + 1;
     sp.shadow.bias = -0.0012;
-    sp.shadow.normalBias = 0.012;   // was 2 cm — the size of the wart relief itself
-    sp.shadow.radius = 8;           // VSM blur: this is what makes the edges soft
+    sp.shadow.normalBias = 0.012;
+    sp.shadow.radius = 8;
     sp.shadow.blurSamples = 16;
     scene.add(sp, sp.target);
   });

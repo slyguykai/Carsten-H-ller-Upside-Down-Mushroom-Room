@@ -62,12 +62,12 @@ Single file, numbered `/* == N. TITLE == */` banners.
 | 1 | Utilities — `mulberry32`, `noise2`, `revolve()` |
 | 2 | Room envelope (`ROOM = {w:14, d:7, h:4.6}`) |
 | 3 | Renderer/scene/camera — ACES, exposure 0.55, `FogExp2`, 74° hfov, VSM shadows |
-| 4 | Room shell |
-| 5 | Floor luminaires |
+| 4 | Room shell — West Village gallery: white walls/ceiling, pale oak plank floor, baseboard |
+| 5 | Floor luminaires — recessed splayed wells punched through the floor Shape, two tubes each |
 | 6 | Cap materials — `CRUST`, `pnoise`, `crustField`, `crustGrid`, `makeCapTexture`, `capMaterial` |
 | 7 | `capGeometry()`, `shapeCap()`, `WART_GEO`, `makeMushroom(cfg)` |
 | 8 | `S` stage table + `PLAN` placement array |
-| 9 | Lighting |
+| 9 | Lighting — RectAreaLight per well (needs RectAreaLightUniformsLib.init()), hemisphere, three upward shadow spots |
 | 10 | Post — GTAO → UnrealBloom → Output |
 | 11–14 | Player, walk/collide/duck, render loop, HUD |
 

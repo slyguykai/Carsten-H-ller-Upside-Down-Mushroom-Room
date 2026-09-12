@@ -293,6 +293,68 @@ const stripMat = new THREE.MeshStandardMaterial({
    6.  MUSHROOM SHADERS
    ============================================================ */
 
+/* ---- the universal veil as ONE cracked crust ----------------------------
+   Not scattered warts.  A single crust thresholded from a noise field, whose
+   coverage and feature size differ per developmental stage:
+     dense fine dotting -> tangential labyrinthine ridges -> isolated plaques.
+   The reference (crops/D_crustbutton_03.jpg) shows sinuous CIRCUMFERENTIAL
+   ridges with red in the gaps, solid at the rim, widest gaps mid-cap.
+   Thresholds were calibrated by bisection to hit the target coverage; note
+   coverage is NOT monotonic with age — the smallest buttons are red with ~38%
+   fine white dotting, and no fully-white stage exists in the reference. */
+const CRUST = {
+  peppercorn: { cov: 0.38, scale: 3.40, tang: 0.12 },
+  button:     { cov: 0.52, scale: 2.20, tang: 0.35 },
+  labyrinth:  { cov: 0.50, scale: 1.30, tang: 0.72 },
+  expanding:  { cov: 0.28, scale: 1.25, tang: 0.45 },
+  mature:     { cov: 0.15, scale: 1.45, tang: 0.12 }
+};
+
+/* Angular noise that CLOSES around the cap.  noise2's internal multipliers
+   (1.7 / 3.3 / 6.1) are irrational with respect to 2*pi, so feeding it an
+   angle leaves a visible discontinuity at the revolve seam.  Integer
+   harmonics of theta are periodic by construction. */
+function pnoise(th, y, s, F){
+  return 0.55 * Math.sin(F * th + y * 0.8 + s)
+       + 0.30 * Math.sin(2 * F * th - y * 2.1 + s * 1.7)
+       + 0.15 * Math.sin(4 * F * th + y * 4.7 + s * 2.9);
+}
+const HF = n => Math.max(1, Math.round(n));
+
+/* t = 0 at the cap apex, 1 at the margin.  Signed; above the stage threshold
+   is crust.  Tangential ring term + island noise, the ring warped hard in
+   theta so it breaks into sinuous arcs instead of perfect concentric circles. */
+function crustField(th, t, p, seed){
+  const bands = (5.5 + 5.5 * t) * Math.max(0.55, p.scale * 0.75);
+  const warp  = 3.1 * pnoise(th, t * 2.2, seed, HF(4.5))
+              + 1.5 * pnoise(th, t * 4.4, seed + 7, HF(9.1));
+  const ring  = Math.sin(t * Math.PI * bands + warp);
+  const k = p.scale;
+  const isle = 0.62 * pnoise(th, t * 4.2 * k,  seed + 11, HF(2.6 * k))
+             + 0.30 * pnoise(th, t * 9.1 * k,  seed + 29, HF(5.9 * k))
+             + 0.14 * pnoise(th, t * 17.7 * k, seed + 53, HF(11.3 * k));
+  const field = p.tang * 0.80 * ring + (1 - 0.40 * p.tang) * isle;
+  const belt  = 0.94 + 0.13 * Math.sin(Math.PI * Math.pow(t, 0.8));  // gaps widest mid-cap
+  return field / belt;
+}
+
+/* Solve the threshold from the target coverage instead of hard-coding it:
+   the quantile is exact, survives any change to the field, and the plaque
+   placement reads back the same number the texture was painted with. */
+const CRUST_GRID = {};
+function crustGrid(stage, seed){
+  if (CRUST_GRID[stage]) return CRUST_GRID[stage];
+  const p = CRUST[stage], GW = 768, GH = 384;
+  const f = new Float32Array(GW * GH);
+  for (let y = 0; y < GH; y++){
+    const t = y / (GH - 1);
+    for (let x = 0; x < GW; x++) f[y * GW + x] = crustField(x / GW * Math.PI * 2, t, p, seed);
+  }
+  const sorted = Float32Array.from(f).sort();
+  const thr = sorted[Math.floor((1 - p.cov) * (sorted.length - 1))];
+  return (CRUST_GRID[stage] = { f, GW, GH, thr, p, seed });
+}
+
 /* ---- the cap strip, painted along v across the whole lens cross-section ----
    v 0            red apex (hangs lowest, faces the floor)
    v 0-.70        red skin: hot orange-scarlet, heavy low-frequency mottling
@@ -302,7 +364,7 @@ const stripMat = new THREE.MeshStandardMaterial({
    v .84-1        gill-side flesh, mauve-tinted (mostly hidden by lamellae)
    The four-band margin is what the eye actually reads at duck height, and no
    amount of geometry substitutes for it. */
-function makeCapTexture(seed, crimson = 0){
+function makeCapTexture(seed, crimson = 0, crustP = null){
   const w = 1024, h = 512;
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const g = c.getContext('2d');
@@ -367,30 +429,70 @@ function makeCapTexture(seed, crimson = 0){
     g.fillStyle = `rgba(${R()>0.5?120:250},${R()>0.5?110:242},${R()>0.5?112:228},${rr(0.05,0.22)})`;
     g.fillRect(x, y, rr(1, 4), rr(1, 3));
   }
+  /* --- lay the veil crust over the red skin (v 0 .. .70 == apex .. margin) ---
+     Evaluated on a coarse grid and scaled up: a per-pixel evaluation is ~16
+     sines per texel and would cost seconds at page load. */
+  const bc = document.createElement('canvas'); bc.width = w; bc.height = h;
+  const bg2 = bc.getContext('2d');
+  bg2.fillStyle = '#808080'; bg2.fillRect(0, 0, w, h);          // neutral = no relief
+  if (crustP){
+    const { f, GW, GH, thr } = crustP;
+    const col = document.createElement('canvas'); col.width = GW; col.height = GH;
+    const bmp = document.createElement('canvas'); bmp.width = GW; bmp.height = GH;
+    const cx2 = col.getContext('2d'), bx2 = bmp.getContext('2d');
+    const ci = cx2.createImageData(GW, GH), bi = bx2.createImageData(GW, GH);
+    for (let yy = 0; yy < GH; yy++){
+      const t01 = yy / (GH - 1);
+      for (let xx = 0; xx < GW; xx++){
+        const i4 = (yy * GW + xx) * 4;
+        const e  = clamp((f[yy * GW + xx] - thr) / 0.045, 0, 1);   // narrow shoulder: crisp edge
+        ci.data[i4 + 3] = Math.round(255 * e);
+        let hsh = (xx * 374761393 + yy * 668265263) | 0;
+        hsh = (hsh ^ (hsh >> 13)) * 1274126177 | 0;
+        const spk = 0.80 + 0.20 * (((hsh ^ (hsh >> 16)) >>> 0) / 4294967296);
+        ci.data[i4]     = Math.round(214 * spk);
+        ci.data[i4 + 1] = Math.round(204 * spk);
+        ci.data[i4 + 2] = Math.round(184 * spk);
+        const v = 118 + 120 * e;
+        bi.data[i4] = bi.data[i4 + 1] = bi.data[i4 + 2] = v; bi.data[i4 + 3] = 255;
+      }
+    }
+    cx2.putImageData(ci, 0, 0); bx2.putImageData(bi, 0, 0);
+    g.imageSmoothingEnabled = true; bg2.imageSmoothingEnabled = true;
+    g.drawImage(col, 0, yFor(0.70), w, yFor(0) - yFor(0.70));
+    bg2.drawImage(bmp, 0, yFor(0.70), w, yFor(0) - yFor(0.70));
+  }
+
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
   t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  return t;
+  const b = new THREE.CanvasTexture(bc);
+  b.wrapS = THREE.RepeatWrapping; b.wrapT = THREE.ClampToEdgeWrapping;
+  b.anisotropy = t.anisotropy;
+  return { map: t, bump: b };
 }
 
-const CAP_MATS = [];
-/* A handful of cap variants, so nine caps are not one repeated texture.
-   Matte-to-satin with a weak coat: the reference red is chalky, not glossy. */
-function capMaterial(crimson){
-  const k = (crimson > 0.5 ? 4 : 0) + Math.floor(rng() * 4);
-  if (!CAP_MATS[k]) CAP_MATS[k] = new THREE.MeshPhysicalMaterial({
-    map: makeCapTexture(9001 + k * 7717, crimson), color: 0xffffff,
-    roughness: 0.60, metalness: 0.0, clearcoat: 0.18, clearcoatRoughness: 0.40,
-    side: THREE.DoubleSide
-  });
-  return CAP_MATS[k];
+const CAP_MATS = {};
+/* One material per developmental stage: the crust is baked into the map, so
+   the stage — not a random variant index — is what distinguishes them. */
+function capMaterial(stage, crimson){
+  if (!CAP_MATS[stage]){
+    const tex = makeCapTexture(9001 + stage.length * 7717, crimson,
+                               CRUST[stage] ? crustGrid(stage, 3.7) : null);
+    CAP_MATS[stage] = new THREE.MeshPhysicalMaterial({
+      map: tex.map, bumpMap: tex.bump, bumpScale: 0.9, color: 0xffffff,
+      roughness: 0.60, metalness: 0.0, clearcoat: 0.18, clearcoatRoughness: 0.40,
+      side: THREE.DoubleSide
+    });
+  }
+  return CAP_MATS[stage];
 }
 
 const MAT = {
   /* semi-gloss satin + a faint coat, per the sculpture's finish */
   /* chalky, near-zero specular, warm ivory — the universal-veil warts */
-  wart : new THREE.MeshStandardMaterial({ color: 0xefe6d6, roughness: 0.96, metalness: 0, flatShading: true }),
+  wart : new THREE.MeshStandardMaterial({ color: 0xd8cdb6, roughness: 1.0, metalness: 0 }),
   /* thin, translucent lamellae: a touch of self-illumination fakes the SSS
      glow as the floor light is transmitted through the tissue */
   gill : new THREE.MeshStandardMaterial({
@@ -475,9 +577,12 @@ function shapeCap(geo, R, lobe, undulate){
   geo.computeVertexNormals();
 }
 
-const WART_GEO = (() => {                       // low-poly polygonal chunk
-  const g = new THREE.ConeGeometry(1, 1, 5, 1);
-  g.translate(0, 0.5, 0);                       // base sits on y = 0
+const WART_GEO = (() => {
+  /* Top radius > base radius gives the UNDERCUT seen at full resolution in
+     crops/V3_annulus_06.jpg — the plaque overhangs the skin and casts a hard
+     line at its edge.  Flat-topped, not conical. */
+  const g = new THREE.CylinderGeometry(1.0, 0.78, 1, 9, 1);
+  g.translate(0, 0.5, 0);
   return g;
 })();
 
@@ -576,23 +681,40 @@ function makeMushroom(cfg){
     gillGeo.computeVertexNormals();
   }
 
-  /* --- universal veil: chalky pyramidal warts, densest toward the centre,
-         thinning to nothing at the margin ------------------------------- */
-  const nWarts = Math.round(rand(20, 34) * Math.min(1.7, capR / 0.9));
+  /* --- veil plaques: silhouette relief on top of the baked crust.  Placed by
+         REJECTION SAMPLING the same field the texture uses, so the geometry
+         and the painted pattern agree instead of being two unrelated scatters. --- */
+  const CG2 = crustGrid(cfg.crustStage || 'mature', 3.7);
+  const cp = CG2.p;
+  const wantW = Math.round(rand(40, 70) * Math.min(1.8, capR / 0.9) * (0.35 + cp.cov));
+  const wPos = [];
+  for (let guard = 0; guard < wantW * 40 && wPos.length < wantW; guard++){
+    const t  = Math.pow(rng(), 0.75);              // slight bias outward
+    const th = rng() * Math.PI * 2;
+    // only well inside a plaque, so geometry and painted pattern agree
+    if (crustField(th, t, cp, CG2.seed) < CG2.thr + 0.05) continue;
+    wPos.push([th, t]);
+  }
+  const nWarts = Math.max(1, wPos.length);
   const warts = new THREE.InstancedMesh(WART_GEO, MAT.wart, nWarts);
   {
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0), sc = new THREE.Vector3(), pos = new THREE.Vector3();
     for (let i = 0; i < nWarts; i++){
-      const t  = Math.pow(rng(), 1.7);                 // biased toward the apex
-      const th = rng() * Math.PI * 2;
+      const [th, t] = wPos[i] || [rng() * Math.PI * 2, rng()];
       const phi = phiMax * t;
       const r = Rs * Math.sin(phi), yy = y0 - Rs * Math.cos(phi);
-      const n = new THREE.Vector3(Math.sin(phi) * Math.sin(th), -Math.cos(phi), Math.sin(phi) * Math.cos(th)).normalize();
-      pos.set(r * Math.sin(th), yy, r * Math.cos(th)).addScaledVector(n, -0.030);
-      q.setFromUnitVectors(up, n);
-      const s = capR * rand(0.035, 0.075) * (1 - 0.35 * t);
-      sc.set(s * rand(0.8, 1.3), s * rand(0.55, 1.0), s * rand(0.8, 1.3));
+      const n = new THREE.Vector3(Math.sin(phi) * Math.sin(th), -Math.cos(phi),
+                                  Math.sin(phi) * Math.cos(th)).normalize();
+      const L = lobe(th), w = Math.pow(clamp(r / capR, 0, 1), 1.5);
+      const rs = 1 + (L - 1) * w;
+      pos.set(r * Math.sin(th) * rs, yy + undulate(th) * w, r * Math.cos(th) * rs)
+         .addScaledVector(n, -0.004);
+      q.setFromUnitVectors(up, n.clone().negate());   // outward = downward off the red skin
+      q.multiply(new THREE.Quaternion().setFromAxisAngle(up, rng() * Math.PI * 2));
+      // flat plaques: relief ~12% of the plaque's own width
+      const sw = capR * rand(0.020, 0.052) * (0.8 + 0.5 / Math.max(0.7, cp.scale));
+      sc.set(sw * rand(0.8, 1.3), sw * rand(0.10, 0.16), sw * rand(0.8, 1.3));
       mtx.compose(pos, q, sc);
       warts.setMatrixAt(i, mtx);
     }
@@ -639,7 +761,7 @@ function makeMushroom(cfg){
 
   /* --- assemble (cap + gills ride the stipe's curvature) --- */
   const stemMesh   = new THREE.Mesh(stemGeo, MAT.stem);
-  const capMesh    = new THREE.Mesh(capGeo, capMaterial(cfg.crimson || 0));
+  const capMesh    = new THREE.Mesh(capGeo, capMaterial(cfg.crustStage || 'mature', cfg.crimson || 0));
   const gillMesh   = new THREE.Mesh(gillGeo, MAT.gill);
   const collarMesh = new THREE.Mesh(collarGeo, MAT.volva);
   capMesh.position.copy(capOffset);  capMesh.position.y  += rimY;
@@ -678,10 +800,10 @@ function makeMushroom(cfg){
    (0.30 + 0.30*0.45) / 2 = 22%, against ~33% before — the earlier caps were
    half again too fat for their width (reference: crops/E_capedge_05.jpg). */
 const S = {                                     // stage → proportions
-  button        : { h: 1.10, r: 0.30, gr: 0.85, crimson: 1 },
-  hemispherical : { h: 0.62, r: 0.26, gr: 0.62, crimson: 1 },
-  convex        : { h: 0.40, r: 0.27, gr: 0.52, crimson: 0 },
-  mature        : { h: 0.30, r: 0.29, gr: 0.45, crimson: 0 }
+  button        : { h: 1.10, r: 0.30, gr: 0.85, crimson: 1, crust: 'peppercorn' },
+  hemispherical : { h: 0.62, r: 0.26, gr: 0.62, crimson: 1, crust: 'labyrinth'  },
+  convex        : { h: 0.40, r: 0.27, gr: 0.52, crimson: 0, crust: 'expanding'  },
+  mature        : { h: 0.30, r: 0.29, gr: 0.45, crimson: 0, crust: 'mature'     }
 };
 
 const PLAN = [
@@ -706,6 +828,7 @@ PLAN.forEach(([x, z, capR, stemH, stage, bend, tiltX, tiltZ]) => {
     capH: capR * st.h * rand(0.94, 1.06),
     gillRise: st.gr * rand(0.92, 1.08),
     crimson: st.crimson,
+    crustStage: st.crust,
     bend, tiltX, tiltZ
   });
   scene.add(m.group);

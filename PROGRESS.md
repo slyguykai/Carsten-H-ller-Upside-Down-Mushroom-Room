@@ -9,6 +9,8 @@ Fondazione Prada installation, driven by reference photography in
 - `5435aab` Phase 1 — foundations
 - `2247634` Phase 2 — biconvex lens
 - `fd2f8dd` Phase 2 review revisions
+- `e010ba7` revolve seam, lobing, exposure
+- Phase 3 — veil crust
 
 ## Done
 
@@ -27,37 +29,24 @@ the single biggest form error. Stage table retuned (mature was 33% as thick as w
 `shapeCap()` breaks the surface of revolution with 12-15 lobes at 3-5% of radius. Cap texture
 repainted along v across the whole cross-section to give the four-band margin.
 
-## Next: Phase 3 — the veil crust ("the bulbs")
+## Phase 3 done — the veil crust
 
-**The algorithm is already solved and calibrated** — do not re-derive it. It is NOT scattered
-instanced warts; it is one cracked crust thresholded from a noise field, at different coverage
-and feature size per stage. Working prototype logic:
+Implemented as one cracked crust thresholded from a noise field, baked into the cap
+colour map plus a matching bump map, with instanced flat-topped plaques for silhouette
+placed by rejection-sampling the SAME field so geometry and paint agree.
 
-```js
-bands = (5.5 + 5.5*t) * max(0.55, scale*0.75)
-warp  = 3.1*noise(th*4.5, t*2.2, seed) + 1.5*noise(th*9.1, t*4.4, seed+7)  // breaks rings into arcs
-ring  = sin(t*PI*bands + warp)
-isle  = 0.62*noise(th*2.6s, t*4.2s, seed+11) + 0.30*noise(th*5.9s, t*9.1s, seed+29)
-      + 0.14*noise(th*11.3s, t*17.7s, seed+53)
-field = tang*0.80*ring + (1 - 0.40*tang)*isle
-belt  = 0.94 + 0.13*sin(PI*t^0.8)        // gaps widest mid-cap
-crust = (field/belt) > thr
-```
-`t` = normalised apex→margin. `noise` = the existing `noise2`. Thresholds were calibrated by
-bisection to hit target coverage:
+Two corrections made during implementation, both only visible once rendered:
+- **The field must be periodic in theta.** `noise2`'s internal multipliers (1.7/3.3/6.1)
+  are irrational w.r.t. 2*pi, so feeding it an angle left a hard discontinuity at the
+  revolve seam. Replaced with `pnoise()` using integer harmonics of theta.
+- **Thresholds are now solved at runtime**, not hard-coded. `crustGrid()` builds the
+  field once per stage and takes the quantile for the target coverage. The old table of
+  calibrated constants is gone and should not be reinstated — it silently went stale the
+  moment the field changed.
 
-| stage      | coverage | scale | tang | thr     |
-|------------|----------|-------|------|---------|
-| peppercorn | 0.38     | 3.4   | 0.12 |  0.1032 |
-| button     | 0.52     | 2.2   | 0.35 | -0.0168 |
-| crust      | 0.50     | 1.30  | 0.72 |  0.0142 |
-| expanding  | 0.28     | 0.95  | 0.45 |  0.2149 |
-| mature     | 0.15     | 0.70  | 0.12 |  0.3323 |
-
-Coverage is NOT monotonic with expansion — the photographs' smallest buttons are red with ~38%
-fine white dotting; there is no fully-white stage. Coverage and feature size must stay
-independent parameters. Plaque profile is flat-topped with a hard UNDERCUT (they overhang the
-skin), relief ~10-15% of the plaque's own width, warm bone-white with dark speckling.
+Stage -> crust mapping lives in the `S` table (`crust:` key). Feature `scale` had to go
+up substantially for mature/expanding versus the flat prototype: features render much
+coarser on the actual cap than the (theta,t) ASCII preview suggested.
 
 ## Then
 - **Phase 4 — stipe.** Onion/teardrop ceiling bulb, 2-2.5x shaft, wrapped in 5-8 concentric
@@ -72,9 +61,12 @@ skin), relief ~10-15% of the plaque's own width, warm bone-white with dark speck
   Keep the wall gradient as a lighting result, not baked albedo.
 
 ## Open / unverified
-- **Nothing has been rendered in a browser.** Geometry is unit-tested and the cap texture was
-  verified via an offline PNG re-render, but the assembled scene — shadows, AO, the lens in
-  perspective — is unconfirmed. Serve with `python3 -m http.server` and look before trusting it.
+- Rendering is now verified in-browser. `?debug` exposes `window.__room.look(x,y,z,yaw,pitch)`
+  for a free camera; without it the render loop pins the view to the threshold.
+- **Lighting needs a final pass after Phase 6.** Exposure is 0.55 against a near-white floor;
+  a terracotta floor absorbs far more and the scene will darken. Also every floor luminaire
+  currently sits at z = 0 in one central row, so caps at z = +/-1.78 are underlit — the real
+  layout is a grid, which Phase 6 introduces.
 - Cap red is **resolved**. Four rounds of correcting the base hex were fighting the wrong
   variable: the base at 5.8 deg hue was already a correct cool scarlet. The fault was the
   accent layers at 15-22 deg hue stacking ~34 deep. Cooled and thinned those instead; the

@@ -1,150 +1,121 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
+
+> **Active work:** branch `mushroom-detail-1to1` is a six-phase 1:1 rebuild of
+> `mushroom-room-fp2.html` against real reference photography. **Read `PROGRESS.md` first** —
+> it holds phase-by-phase state, the remaining specs, and open questions. This file describes
+> the repo; `PROGRESS.md` describes the work in flight.
 
 ## What this is
 
-A procedural, code-only recreation of Carsten Höller's *Upside Down Mushroom Room* — giant fly-agaric
-sculptures hanging from the ceiling of a gallery, inverted: the stipe runs *up* to the ceiling, the
-convex red cap faces the *floor*, and the gills face the *ceiling*. There is no build system, package
-manager, dependency manifest, or test suite. Each file is a self-contained script/page that generates
-the entire scene from scratch at runtime — no imported meshes, no image assets, no `node_modules`.
+A procedural, code-only recreation of Carsten Höller's *Upside Down Mushroom Room* — giant
+fly-agaric sculptures hanging from a gallery ceiling, inverted: the stipe runs *up* to the
+ceiling, the convex red cap faces the *floor*, the gills face the *ceiling*. No build system,
+package manager, dependency manifest, or test suite. Each file generates the entire scene from
+scratch at runtime — no imported meshes, no image assets, no `node_modules`.
 
-Two independent implementations of the same subject live side by side:
+- **Blender/Cycles** (`blender-mushroom-room.py`, `blender-mushroom-room2.py`) — offline stills.
+- **three.js** (`mushroom-room-fp.html`, `mushroom-room-fp2.html`) — real-time, walkable.
 
-- **Blender/Cycles scripts** (`blender-mushroom-room.py`, `blender-mushroom-room2.py`) — offline path-traced stills.
-- **three.js web pages** (`mushroom-room-fp.html`, `mushroom-room-fp2.html`) — real-time, walkable, in-browser.
+### What `2` means (read before editing)
 
-### What `2` actually means (read this before editing)
+`2` is "later iteration of that file", **not** "second half of a pair".
+`blender-mushroom-room2.py` is **byte-identical** to `blender-mushroom-room.py` — a copy, not a
+revision. `mushroom-room-fp2.html` is a genuine revision of `fp.html`, and is now far ahead of
+both Blender scripts (different room dimensions, inverted lighting key, five developmental
+stages, a real veil-crust system). **The Blender track has not been touched by the rebuild and
+is generationally well behind.** Treat CLAUDE.md's old claim that fixes should be ported to both
+tracks as aspirational: they no longer depict the same room.
 
-`2` means "later iteration of that one file", **not** "second half of a matched pair". The two tracks
-are at different generations and the naming hides it:
-
-| File | Status |
-| --- | --- |
-| `blender-mushroom-room2.py` | **Byte-identical** to `blender-mushroom-room.py` (`md5 cd2ed624…`). The `2` is a copy, not a revision. |
-| `mushroom-room-fp2.html` | A genuine, substantial revision of `mushroom-room-fp.html`. |
-
-So `blender-*2.py` is generationally **behind** `mushroom-room-fp2.html`, not parallel to it:
-
-| | Blender (both files) & `fp.html` | `fp2.html` |
-| --- | --- | --- |
-| Room | 26 × 18 × 10 m (invented hall) | 14 × 7 × 4.6 m (Fondazione Prada figures) |
-| Mushrooms | 12, one generic stage | 9, four developmental stages (`button`/`hemispherical`/`convex`/`mature`) |
-| Lighting key | ceiling softboxes, bright white hall | **inverted** — floor luminaire slits key the scene, slate-grey ceiling, caps lit from below |
-| Cap surface | flat red material + sphere "spots" | canvas-painted `makeCapTexture()` + instanced pyramidal warts |
-| Gills | uniform sine corrugation | alternating full lamellae / short lamellulae |
-| Stipe | straight, noise-lumped | `bend` curvature, volva + annulus (partial veil) |
-| Player | stand only | stand + crouch, auto-duck driven by real cap-underside clearance |
-
-When asked to improve "the room," **ask which track** (Blender stills, web walkthrough, or both). For
-the web track edit `mushroom-room-fp2.html`. For the Blender track, note that editing
-`blender-mushroom-room2.py` silently diverges it from its identical twin — decide explicitly whether
-to also update `blender-mushroom-room.py` or to collapse the duplicate.
+When asked to improve "the room," **ask which track**. For the web track edit `fp2.html`.
 
 ## Running things
 
-**Blender scripts** — need a local Blender (3.6 LTS – 4.x); nothing else:
-
 ```bash
-blender --background --python blender-mushroom-room2.py
-blender --background --python blender-mushroom-room2.py -- --samples 64 --res 1280
-blender --background --python blender-mushroom-room2.py -- --no-render     # geometry only, seconds not minutes
+python3 -m http.server 8765
 ```
+then open `http://localhost:8765/mushroom-room-fp2.html`. three.js loads from an `importmap`
+pinned to `three@0.169.0` on unpkg, so an internet connection is required.
 
-Writes `mushroom_room.blend` and `mushroom_room.png` next to the script. The script resets from factory
-settings, so re-running is safe. `--no-render` is the fast iteration loop when changing geometry —
-open the `.blend` to inspect. Rendering falls back CYCLES → EEVEE automatically. Cycles is pinned to
-**CPU** (`compute_device_type = 'NONE'`); switch to `'OPTIX'`/`'CUDA'` for GPU.
+**`?debug` is the only way to inspect geometry.** Without pointer lock the render loop pins the
+camera to the threshold. Append `?debug` and use:
 
-**HTML/three.js pages** — no build step:
-
-```bash
-python3 -m http.server 8000   # then open http://localhost:8000/mushroom-room-fp2.html
+```js
+window.__room.look(x, y, z, yaw, pitch)   // free camera; also exposes scene, camera, renderer, MAT
 ```
+Room is 14 (x) × 7 (z) × 4.6 m (y); eye height 1.62. Useful viewpoints are listed in `PROGRESS.md`.
 
-three.js and its addons come from an `importmap` pinned to `three@0.169.0` on `unpkg.com`, so an
-internet connection is required. Opening via `file://` also works since there is no fetch of local
-assets, but serving is safer for module resolution.
+Blender: `blender --background --python blender-mushroom-room2.py -- --no-render` for a fast
+geometry-only pass; writes `mushroom_room.blend`/`.png` next to the script.
 
-There is no linter, formatter, or test command. Validate Blender changes by running with `--no-render`
-and inspecting the `.blend`; validate web changes by loading the page in a browser and walking the
-aisle. Mind the perf budget: `fp2.html` builds ~1–3 M triangles of gills at desktop `Q`.
+There is no linter, formatter, or test command. **Validate web changes by rendering them in a
+browser** — see "Lessons" below for why this is not optional.
 
-## Architecture
+## Architecture — `mushroom-room-fp2.html`
 
-Both tracks reimplement the *same* geometry independently. A fix to the underlying math — the
-spherical-bowl cap profile, the stipe flare, the gill offset — generally needs porting to both
-`cap_geometry()` (Python) and the inline cap block in `makeMushroom()` (JS) to keep them consistent,
-unless the change is deliberately track-specific.
-
-**Coordinate conventions differ and are easy to get wrong:**
-
-- Blender is **Z-up**; mushrooms are parented to an empty at `z = ROOM_H` and grow downward in −Z.
-- three.js is **Y-up**; `makeMushroom` works in a local frame with `y = 0` at the ceiling, the cap rim
-  at `y = -stemH`, and the cap apex — the lowest point — at `y = -stemH - capH`.
-- In both, the cap profile is generated **rim-at-origin, apex-negative**, then translated down the stipe.
-
-### Blender scripts
-
-Single flat script, top to bottom, no imports beyond `bpy`/`bmesh`/`mathutils`/stdlib:
-
-1. **Config block** (`SEED`, `ROOM_W/D/H`, `SAMPLES`, `RES_X/Y`) — CLI args after `--` override it.
-2. **Helpers**: `mat_simple()` builds a Principled BSDF tolerant of 3.x/4.x socket-name differences;
-   `new_object()`/`revolve()` build meshes from raw vertex/face data (`revolve()` sweeps a
-   `(radius, z)` profile around Z); `radial_displace()` and `rough_displace()` perturb vertices
-   sinusoidally for gill corrugation and stem lumpiness.
-3. **Mushroom generation**: `cap_geometry(R, H)` derives a spherical bowl from target half-width `R`
-   and depth `H` (sphere centre `y0 = (R² − H²)/2H`, radius `Rs = y0 + H`); `build_mushroom()`
-   assembles stem + cap + gills + scattered veil spots + ceiling collar under one parented empty.
-   The `MUSHROOMS` list of `(x, y, R, H, stem_h, stem_r, tilt_x, tilt_y)` tuples is the primary
-   layout lever.
-4. **Room shell, floor light strips, two dark figures, area lights, camera, render settings** follow
-   in sequence, each a self-contained block.
-
-### three.js pages
-
-Single file, numbered `/* == N. TITLE == */` banners. Section numbers differ between the two files —
-read the banners in the target file first. `fp2.html`:
+Single file, numbered `/* == N. TITLE == */` banners.
 
 | § | Contents |
 | --- | --- |
-| 0 | Device/quality — `IS_TOUCH`, geometry density scalar `Q`, `USE_BLOOM` |
-| 1 | Utilities — `mulberry32` seeded RNG, sine-sum `noise2`, `revolve()` (JS analogue of the Blender helper; arc-length V coords) |
-| 2 | Room envelope constants (`ROOM = {w:14, d:7, h:4.6}`) |
-| 3 | Renderer/scene/camera — ACES tone mapping, `FogExp2`, FOV derived from a 24 mm-equivalent 74° *horizontal* FOV, low-intensity `RoomEnvironment` IBL |
-| 4 | Room shell — white plaster walls, polished floor, **slate-grey ceiling** |
-| 5 | Floor luminaire slits — 11 transverse emissive slots; the installation's primary key |
-| 6 | Mushroom materials — `makeCapTexture()` paints a canvas (blotchy pigment + gold marginal striations) instead of loading an image |
-| 7 | `makeMushroom(cfg)` — stipe, pileus, hymenium, warts, annulus, volva/collar; returns `{group, stemCollider, dome}` |
-| 8 | The installation — `S` stage-proportion table + `PLAN` placement array (the `MUSHROOMS` equivalent) |
-| 9 | Lighting — hemisphere (dark cool above, warm below) + point lights in the slits |
-| 10 | Post — `EffectComposer` + `UnrealBloomPass` + `OutputPass`, desktop only |
-| 11 | Player — eye 1.62 m standing / 0.92 m crouched |
-| 12 | Walk · collide · duck — `clearanceUnder(dome, x, z)` evaluates the real cap underside so the player auto-ducks under low caps |
-| 13 | Render loop |
-| 14 | HUD wiring — start panel, touch joystick, hint bar |
+| 0 | Device/quality — `IS_TOUCH`, density scalar `Q`, `USE_BLOOM` |
+| 1 | Utilities — `mulberry32`, `noise2`, `revolve()` |
+| 2 | Room envelope (`ROOM = {w:14, d:7, h:4.6}`) |
+| 3 | Renderer/scene/camera — ACES, exposure 0.55, `FogExp2`, 74° hfov, VSM shadows |
+| 4 | Room shell |
+| 5 | Floor luminaires |
+| 6 | Cap materials — `CRUST`, `pnoise`, `crustField`, `crustGrid`, `makeCapTexture`, `capMaterial` |
+| 7 | `capGeometry()`, `shapeCap()`, `WART_GEO`, `makeMushroom(cfg)` |
+| 8 | `S` stage table + `PLAN` placement array |
+| 9 | Lighting |
+| 10 | Post — GTAO → UnrealBloom → Output |
+| 11–14 | Player, walk/collide/duck, render loop, HUD |
 
-Route all new geometry generation through `Q` so touch devices stay performant, and prefer
-`InstancedMesh` for anything scattered (the warts already are).
+**Coordinates:** Blender is Z-up; three.js is Y-up. `makeMushroom` works in a local frame with
+`y = 0` at the ceiling, the cap rim at `y = -stemH`, apex at `y = -stemH - capH`.
 
-## Known issues / rough edges
+### Key systems
 
-Confirmed by reading, not speculation — worth fixing when touching nearby code:
+- **`capGeometry(R, H, rings, gillRise, gillFlat)`** returns one closed **biconvex lens**
+  profile (red apex → rim roll → gill apex) plus explicit `uvV`. The red skin bulges down; the
+  gill envelope bulges **up** on a flatter profile; they close to a knife edge at the margin.
+- **`shapeCap()`** breaks the surface of revolution — 9–12 lobes plus one dominant asymmetric
+  notch, weighted `(r/R)^1.5` so the stipe attachment stays put.
+- **The cap texture is painted along `v` across the whole cross-section**, giving the four-band
+  margin: red skin → thin hard dark line → cream lip → mauve gill-side flesh.
+- **`crustField()` + `crustGrid()`** — the universal veil as ONE cracked crust thresholded from
+  a noise field, baked into the colour and bump maps, with instanced flat-topped plaques placed
+  by rejection-sampling the same field. Per-stage `{cov, scale, tang}` in `CRUST`; thresholds
+  are **solved at runtime** from target coverage, never hard-coded.
 
-- **`fp2.html:428-430` — dead/degenerate gill code.** `a` is computed only to be tested against `0`;
-  its `Math.sin((th*FINS/FINS)*Math.PI*2*FINS/FINS + finIndex*0)` reduces to `sin(2π·th)`, which zeroes
-  the gill displacement along a handful of arbitrary angles, cutting flat radial seams across the
-  hymenium. The `d = a === 0 ? 0 : …` guard should just be `d = amp * (isLong ? 1 : 0.62) * fade * wave`.
-- **`fp2.html:764,771` — `ShiftRight` is bound to both duck and run**, so right-shift produces a
-  duck-run. Probably unintended.
-- **No shadows in either web page** — `renderer.shadowMap` is never enabled and nothing casts. With a
-  floor-keyed scene this is the largest single realism gap: no contact shadow under the stipes, no
-  occlusion in the gills.
+## Lessons from this rebuild — do not relearn these
+
+- **Render before trusting anything.** Geometry that unit-tested correctly and textures that
+  looked right as flat PNGs were both wrong in perspective: the scene was blown out to
+  near-white, `revolve()` had a seam artefact on every surface, and the cap lobing read as a
+  Pringle. None of it was visible outside a browser.
+- **Angular noise must use integer harmonics of θ.** `noise2`'s internal multipliers
+  (1.7/3.3/6.1) are irrational w.r.t. 2π, so anything driven by an angle will not close around
+  a revolved surface. Use `pnoise()`.
+- **Don't hard-code calibrated constants.** A table of bisection-calibrated thresholds went
+  stale the instant the underlying field changed. Solve them at runtime.
+- **`PCFSoftShadowMap` ignores `shadow.radius`** — there is no softness control under it. This
+  scene uses `VSMShadowMap` deliberately.
+- **Colour: correct the accent layers, not the base.** The cap red read as rust through four
+  rounds of base correction; the base was already a correct 5.8° scarlet. The fault was accent
+  layers at 15–22° hue stacking ~34 deep.
+- **Fixed harmonics alias into visible lattices** at texel scale. Use a hash for speckle.
+
+## Reference material
+
+Six photographs in `agnes-chee-fondazione-prada-photos/` — **gitignored, local to this machine
+only**. Most design decisions in the rebuild are only justifiable by looking at them. Crop with
+`sips -c <h> <w> --cropOffset <y> <x> src.jpg --out crop.jpg` (originals are 3072×4096);
+`PROGRESS.md` lists the load-bearing crops and their coordinates.
+
+## Known issues
+
 - **Nothing rotates.** The real installation's mushrooms turn slowly on motors; neither track animates.
-- **Blender: `SPOT_MESH` is assigned twice**; the first `bpy.data.meshes.new("SpotProto")` is orphaned
-  immediately.
-- **Blender gills are expensive and alias** — a 720-segment revolve carrying a 240-period sine is
-  only 3 samples per gill.
-- **`README.md` is a single title line**, and there is no `.gitignore`, so `mushroom_room.blend` /
-  `mushroom_room.png` land untracked in the repo root after every Blender run.
+- **Blender track is stale** — see above. Also: `SPOT_MESH` is assigned twice (the first mesh is
+  orphaned), and the 720-segment gill revolve carrying a 240-period sine is only 3 samples per gill.
+- `README.md` is a single title line.

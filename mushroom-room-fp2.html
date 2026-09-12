@@ -303,28 +303,35 @@ function makeCapTexture(seed, crimson = 0){
   for (let i = 0; i < 340; i++){
     const x = R() * w, y = yFor(0.80) + R() * (h - yFor(0.80)), rad = rr(40, 190);
     const gr = g.createRadialGradient(x, y, 0, x, y, rad);
-    const hot = R() > 0.62;                     // mostly cool: the skin is scarlet, not rust
-    gr.addColorStop(0, hot ? `rgba(236,86,34,${rr(0.08,0.18)})`
+    /* These blobs overlap ~34 deep, so a 'subtle' orange at 15 deg hue stacks
+       into rust.  The base is already a correct 6 deg scarlet — it was never
+       the problem.  Fewer hot blobs, and nearer red than orange. */
+    const hot = R() > 0.75;
+    gr.addColorStop(0, hot ? `rgba(208,58,26,${rr(0.06,0.14)})`
                            : `rgba(146,24,16,${rr(0.10,0.26)})`);
     gr.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = gr; g.beginPath(); g.arc(x, y, rad, 0, 6.2832); g.fill();
   }
   // mild orange lift toward the margin
-  const om = g.createLinearGradient(0, yFor(0.70), 0, yFor(0.55));
-  om.addColorStop(0, 'rgba(243,116,34,0.20)');
+  const om = g.createLinearGradient(0, yFor(0.72), 0, yFor(0.58));
+  om.addColorStop(0, 'rgba(243,116,34,0.25)');
   om.addColorStop(1, 'rgba(243,116,34,0.00)');
-  g.fillStyle = om; g.fillRect(0, yFor(0.70), w, yFor(0.55) - yFor(0.70));
+  g.fillStyle = om; g.fillRect(0, yFor(0.72), w, yFor(0.58) - yFor(0.72));
   // crimson deepening right at the rim
-  const dm = g.createLinearGradient(0, yFor(0.765), 0, yFor(0.69));
-  dm.addColorStop(0, 'rgba(138,26,18,0.50)');
+  const dm = g.createLinearGradient(0, yFor(0.760), 0, yFor(0.705));
+  dm.addColorStop(0, 'rgba(138,26,18,0.32)');
   dm.addColorStop(1, 'rgba(138,26,18,0.00)');
-  g.fillStyle = dm; g.fillRect(0, yFor(0.765), w, yFor(0.69) - yFor(0.765));
+  g.fillStyle = dm; g.fillRect(0, yFor(0.760), w, yFor(0.705) - yFor(0.760));
 
   // coarse granular substrate — the reference skin has visible orange-peel tooth
   for (let i = 0; i < 9000; i++){
     const x = R() * w, y = yFor(0.80) + R() * (h - yFor(0.80));
+    const v = 1 - y / h;
     const up = R() > 0.5;
-    g.fillStyle = up ? `rgba(250,128,58,${rr(0.02,0.07)})` : `rgba(108,16,12,${rr(0.03,0.12)})`;
+    // fade the warm grain out past v .65 so it stops cancelling the rim darkening
+    const k = up ? clamp((0.72 - v) / 0.07, 0, 1) : 1;
+    if (k <= 0) continue;
+    g.fillStyle = up ? `rgba(224,92,46,${rr(0.02,0.05) * k})` : `rgba(108,16,12,${rr(0.03,0.12)})`;
     g.fillRect(x, y, rr(1, 3), rr(1, 3));
   }
 
@@ -336,13 +343,13 @@ function makeCapTexture(seed, crimson = 0){
     g.beginPath(); g.moveTo(x, y0); g.lineTo(x + rr(-2, 2), y0 - rr(0.02, 0.06) * h); g.stroke();
   }
 
-  g.fillStyle = '#2a1008'; g.fillRect(0, yFor(0.775), w, yFor(0.765) - yFor(0.775)); // dark line
-  g.fillStyle = '#e8dcc4'; g.fillRect(0, yFor(0.840), w, yFor(0.775) - yFor(0.840)); // cream lip
-  g.fillStyle = '#cfc2c4'; g.fillRect(0, 0, w, yFor(0.840));                          // mauve flesh
+  g.fillStyle = '#2a1008'; g.fillRect(0, yFor(0.778), w, yFor(0.760) - yFor(0.778)); // dark line: ~9px, survives mips
+  g.fillStyle = '#e8dcc4'; g.fillRect(0, yFor(0.832), w, yFor(0.778) - yFor(0.832)); // cream lip
+  g.fillStyle = '#c8bcbe'; g.fillRect(0, 0, w, yFor(0.832));                          // mauve flesh
 
   // the lip and flesh are cast plaster, not clean paint
   for (let i = 0; i < 900; i++){
-    const x = R() * w, y = R() * yFor(0.775);
+    const x = R() * w, y = R() * yFor(0.778);
     g.fillStyle = `rgba(${R()>0.5?120:250},${R()>0.5?110:242},${R()>0.5?112:228},${rr(0.05,0.22)})`;
     g.fillRect(x, y, rr(1, 4), rr(1, 3));
   }
@@ -360,7 +367,7 @@ function capMaterial(crimson){
   const k = (crimson > 0.5 ? 4 : 0) + Math.floor(rng() * 4);
   if (!CAP_MATS[k]) CAP_MATS[k] = new THREE.MeshPhysicalMaterial({
     map: makeCapTexture(9001 + k * 7717, crimson), color: 0xffffff,
-    roughness: 0.62, metalness: 0.0, clearcoat: 0.14, clearcoatRoughness: 0.62,
+    roughness: 0.60, metalness: 0.0, clearcoat: 0.18, clearcoatRoughness: 0.40,
     side: THREE.DoubleSide
   });
   return CAP_MATS[k];
@@ -398,7 +405,7 @@ const MAT = {
    `lens` is one closed profile running red-apex -> margin -> gill-apex, with
    explicit uvV so the cap texture can paint the four-band margin along v.
    Direct analogue of cap_geometry() in blender-mushroom-room.py. */
-function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.4){
+function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.8){
   const y0     = (R * R - H * H) / (2 * H);     // sphere centre, above the rim
   const Rs     = y0 + H;
   const phiMax = Math.atan2(R, y0);
@@ -430,7 +437,7 @@ function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.4){
   }
   const redTot = redLen[redLen.length - 1] || 1;
   redLen.forEach(a => uvV.push(0.70 * a / redTot));
-  uvV.push(0.725, 0.765, 0.805);
+  uvV.push(0.722, 0.760, 0.800);
   for (let j = 1; j <= rings; j++) uvV.push(0.82 + 0.18 * ((j - 1) / (rings - 1)));
 
   return { lens, uvV, red, gill, gillY, y0, Rs, phiMax, T };
@@ -471,11 +478,18 @@ function makeMushroom(cfg){
   const rimY  = -stemH;
 
   /* --- per-specimen margin identity: no two caps share an outline --- */
-  const LOBES  = 12 + Math.floor(rng() * 4);            // 12-15 lobes
+  const LOBES  = 9 + Math.floor(rng() * 4);             // 9-12 lobes
   const lobeA  = 0.030 + rng() * 0.020;                 // 3-5% of the radius
   const lobePh = rand(0, Math.PI * 2), undPh = rand(0, Math.PI * 2);
+  /* The reference caps are not sine waves: each has ONE dominant asymmetric
+     bite out of the margin, plus gentle rolling. */
+  const notchTh = rand(0, Math.PI * 2);
+  const notchW  = 0.26 + rng() * 0.24, notchD = 0.055 + rng() * 0.050;
+  const angD = (a, b) => { const d = Math.abs(a - b) % (Math.PI * 2);
+                           return d > Math.PI ? Math.PI * 2 - d : d; };
   const lobe = th => 1 + lobeA * Math.sin(th * LOBES + lobePh)
-                       + 0.40 * lobeA * noise2(th * 2.2, 0, phase);
+                       + 0.40 * lobeA * noise2(th * 2.2, 0, phase)
+                       - notchD * Math.exp(-Math.pow(angD(th, notchTh) / notchW, 2));
   const undulate = th => capR * 0.055 * lobeA / 0.04
                        * Math.sin(th * LOBES * 0.5 + undPh);
 

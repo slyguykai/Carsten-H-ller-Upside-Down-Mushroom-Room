@@ -8,6 +8,7 @@ Fondazione Prada installation, driven by reference photography in
 - `ae92537` CLAUDE.md + .gitignore
 - `5435aab` Phase 1 — foundations
 - `2247634` Phase 2 — biconvex lens
+- `fd2f8dd` Phase 2 review revisions
 
 ## Done
 
@@ -74,9 +75,10 @@ skin), relief ~10-15% of the plaque's own width, warm bone-white with dark speck
 - **Nothing has been rendered in a browser.** Geometry is unit-tested and the cap texture was
   verified via an offline PNG re-render, but the assembled scene — shadows, AO, the lens in
   perspective — is unconfirmed. Serve with `python3 -m http.server` and look before trusting it.
-- A Phase 2 design review was in flight when work paused; its results were not received.
-- Cap red still reads too orange to me after three passes. Was the open question to the
-  reviewer. Base is currently `#d32a18` mature / `#b01c15` young.
+- Cap red is **resolved**. Four rounds of correcting the base hex were fighting the wrong
+  variable: the base at 5.8 deg hue was already a correct cool scarlet. The fault was the
+  accent layers at 15-22 deg hue stacking ~34 deep. Cooled and thinned those instead; the
+  base is unchanged at `#d32a18` mature / `#b01c15` young. Do not re-correct the base.
 - Unresolved from the photos: whether gills are truly free of the stipe, and what the
   through-holes in the largest caps are (rigging access vs. sculptural intent).
 

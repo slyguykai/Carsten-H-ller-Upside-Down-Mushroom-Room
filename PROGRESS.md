@@ -91,6 +91,42 @@ A design review that drove the browser and measured pixels found several things:
 - Plaque outline jittered off a clean polygon; mature `tang` dropped to 0.05; top isle
   octaves rebalanced for fatter, more confluent worms.
 
+## Phase 5 done — the hymenium
+
+Real lamellae replace the sine-corrugated revolve, which topologically could never open a
+gap between blades and so could not self-shadow. Built by `buildHymenium()`.
+
+**Merged BufferGeometry per cap, NOT InstancedMesh.** The cap's margin warp is
+`(r/capR)^1.5`, which varies ALONG a single blade's own length — an instance matrix is one
+affine transform, so instanced blades would float off the flesh at the margin or tear away
+at the hub. This is why `capWarp()` was factored out first; the blade builder calls the same
+closure the flesh does.
+
+Structure, settled by two specialists who initially disagreed by 5x and reconciled:
+- **Depth `capR * 0.05`** (band 0.04-0.07). The first estimate of 16-45% turned out to be the
+  gill DOME's rise off the rim plane (`T/R = h*gr`, 13.5-93.5% in the `S` table) — a real,
+  large, already-modelled quantity — mistaken for individual blade standoff. Cross-check that
+  settled it: at ~176 lamellae the margin spacing is 3.6% of R, and the reference grooves read
+  roughly as deep as they are wide; 16-45% would need grooves 4-13x deeper than wide.
+- **Tiered lamellulae**: long gills throughout, one lamellula between each pair over the outer
+  two-thirds, a third shorter tier near the rim. Gives 1-1 at mid-radius, ~1-3-1 at the margin.
+  Third tier is gated behind `!IS_TOUCH`.
+- **Blind-ending, not forking.** The sculpture forks its ribs; we deliberately depart, because
+  a forked rib needs a clean Y-joint or it reads as a graphics trick up close.
+- **Blunt free edge, not knife-sharp** — this is a stylisation to KEEP. A sharp edge reads as
+  papery; the rounded tooth reads as cast plaster, which is what the object is.
+- Free collar 10-15% of R; blades taper to a point at both ends; per-blade jitter, wander and
+  edge micro-irregularity, because perfectly even spacing is the giveaway of a procedural fan.
+- Four separate face strips per blade so cross-section corners stay hard while the length
+  stays smooth. Sharing vertices around the section averages the corner normals to mush.
+
+**Albedo `#C9BEB6`.** Both specialists converged on this independently. The old `0xc9b6bb`
+had correct S and L but a hue of 344 deg (pink-violet); this is a pure rotation to 25 deg.
+Do NOT bake the mauve read into albedo — it is warm key light plus valley AO doing that, and
+baking it breaks the moment Phase 6 changes the lighting.
+
+Budget: gill triangles 131,384 -> 88,600; scene 532,966 -> 490,182.
+
 ## Then
 ## Direction from the user (2026-09-12)
 

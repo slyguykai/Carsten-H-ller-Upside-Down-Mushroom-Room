@@ -522,8 +522,8 @@ const MAT = {
   /* thin, translucent lamellae: a touch of self-illumination fakes the SSS
      glow as the floor light is transmitted through the tissue */
   gill : new THREE.MeshStandardMaterial({
-    color: 0xc9b6bb, roughness: 0.78, metalness: 0, side: THREE.DoubleSide,
-    emissive: 0x3d2a30, emissiveIntensity: 0.34
+    color: 0xc9beb6, roughness: 0.82, metalness: 0, side: THREE.DoubleSide,
+    emissive: 0x35291f, emissiveIntensity: 0.22
   }),
   stem : new THREE.MeshStandardMaterial({ color: 0xe7e0d3, roughness: 0.88, metalness: 0, side: THREE.DoubleSide }),
   veil : new THREE.MeshStandardMaterial({ color: 0xe9e1d1, roughness: 0.90, metalness: 0, side: THREE.DoubleSide }),
@@ -582,13 +582,111 @@ function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.8){
   uvV.push(0.722, 0.760, 0.800);
   for (let j = 1; j <= rings; j++) uvV.push(0.82 + 0.18 * ((j - 1) / (rings - 1)));
 
-  return { lens, uvV, red, gill, gillY, y0, Rs, phiMax, T };
+  return { lens, uvV, red, gill, gillY, gillFlat, y0, Rs, phiMax, T };
 }
 
 /* Break the surface of revolution.  A perfectly circular rim is the loudest
    tell that a cap was revolved; every cap in the photographs is lobed and its
    margin rises and falls.  Weighted by (r/R)^1.5 so the stipe attachment at the
    centre stays put and the margin moves most. */
+/* ---- hymenium: real lamellae -------------------------------------------
+   Replaces a sine-corrugated surface of revolution, which topologically
+   cannot open a gap between blades and so could never self-shadow.
+
+   Built as ONE merged BufferGeometry per cap, not an InstancedMesh: the cap's
+   margin warp is (r/capR)^1.5, which varies ALONG a single blade's own length,
+   and an instance matrix is a single affine transform — instanced blades would
+   float off the flesh at the margin or tear away at the hub.
+
+   Structure follows the reference: depth ~5% of cap radius (a blade is a thin
+   plate, not a canyon wall), deepest at mid-to-outer-mid radius and tapering to
+   nothing at both ends, free of the stipe, and tiered — long gills throughout,
+   one lamellula between each pair over the outer two-thirds, and a third
+   shorter tier inserting near the rim, giving 1-1 at mid-radius and ~1-3-1 at
+   the margin.  Lamellulae end BLINDLY at a point rather than forking. */
+function buildHymenium({ capR, CG, capWarp, tIn, phase }){
+  const R = capR, T = CG.T, P = CG.gillFlat, tOut = 0.975;
+  const maxD  = R * 0.05;                        // measured, not guessed
+  const halfT = 0.0022 + R * 0.0009;             // absolute metres: an angular
+                                                 // fraction lets the notch pinch
+                                                 // neighbours into each other
+  const NL = clamp(Math.round(58 * Math.pow(R / 1.4, 0.35) * Q), 18, 68);
+  const tiers = [
+    { n: NL,     off: 0.00, tS: tIn + 0.01, rings: Math.max(5, Math.round(10 * Q)), amp: 1.00 },
+    { n: NL,     off: 0.50, tS: 0.33,       rings: Math.max(4, Math.round(7  * Q)), amp: 0.92 }
+  ];
+  if (!IS_TOUCH) tiers.push({ n: NL * 2, off: 0.25, tS: 0.70, rings: 4, amp: 0.78 });
+
+  const domeN = t => {                           // dome normal in the (r, y) plane
+    const nr = T * P * Math.pow(Math.max(t, 1e-4), P - 1) / R;
+    const L = Math.hypot(nr, 1);
+    return [nr / L, 1 / L];
+  };
+  const depthAt = (t, tS, amp) => {
+    const local = clamp((t - tS) / 0.06, 0, 1);                   // blind end -> point
+    const rise  = clamp((t - tIn) / (0.26 - tIn), 0, 1);          // full depth sooner:
+                                                                  // the free collar is
+                                                                  // 10-15% of R, not 30%
+    const fall  = Math.pow(clamp((tOut - t) / (tOut - 0.66), 0, 1), 0.55);
+    return maxD * amp * local * rise * fall;
+  };
+
+  const pos = [], idx = [];
+  const rnd = mulberry32(1337 + Math.round(phase * 1000));
+  for (const tier of tiers){
+    const step = Math.PI * 2 / tier.n;
+    for (let b = 0; b < tier.n; b++){
+      const th0   = (b + tier.off) * step + (rnd() - 0.5) * step * 0.22;  // uneven spacing
+      const wob   = (rnd() - 0.5) * step * 0.30;                          // blades wander
+      const eSeed = rnd() * 10;
+      const rings = tier.rings;
+      const C = [[], [], [], []];
+      for (let j = 0; j <= rings; j++){
+        const u = j / rings;
+        const t = tier.tS + (tOut - tier.tS) * u;
+        const th = th0 + wob * Math.sin(u * Math.PI);
+        const r  = R * t;
+        const { sc, dy } = capWarp(th, r);       // the SAME warp the flesh uses
+        const rr = r * sc, y = CG.gillY(t) + dy;
+        const [nr, ny] = domeN(t);
+        const st = Math.sin(th), ct = Math.cos(th);
+        const n3 = [nr * st, ny, nr * ct];
+        const d  = depthAt(t, tier.tS, tier.amp)
+                 * (0.90 + 0.10 * Math.sin(u * 9 + eSeed));       // edge micro-irregularity
+        const hw  = halfT * (0.45 + 0.55 * Math.min(1, (t - tier.tS) / 0.05));
+        const hwT = hw * 0.55;                   // blunt, not knife-edged: it is cast plaster
+        const px = rr * st, pz = rr * ct;
+        const em = R * 0.004;                    // embed the root INTO the flesh
+        const rx = px - n3[0] * em, ry = y - n3[1] * em, rz = pz - n3[2] * em;
+        const tx = px + n3[0] * d,  ty = y + n3[1] * d,  tz = pz + n3[2] * d;
+        C[0].push([rx - ct * hw,  ry, rz + st * hw]);
+        C[1].push([rx + ct * hw,  ry, rz - st * hw]);
+        C[2].push([tx + ct * hwT, ty, tz - st * hwT]);
+        C[3].push([tx - ct * hwT, ty, tz + st * hwT]);
+      }
+      /* Four separate face strips.  Sharing vertices around the cross-section
+         would average the corner normals and turn the crisp edge to mush; each
+         strip owning its own vertices keeps corners hard while staying smooth
+         along the blade's length. */
+      for (let f = 0; f < 4; f++){
+        const A = C[f], B = C[(f + 1) % 4], s0 = pos.length / 3;
+        for (let j = 0; j <= rings; j++){
+          pos.push(A[j][0], A[j][1], A[j][2], B[j][0], B[j][1], B[j][2]);
+        }
+        for (let j = 0; j < rings; j++){
+          const a = s0 + j * 2;
+          idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 function shapeCap(geo, capWarp){
   const p = geo.attributes.position;
   for (let i = 0; i < p.count; i++){
@@ -696,37 +794,10 @@ function makeMushroom(cfg){
   shapeCap(capGeo, capWarp);
   const { y0, Rs, phiMax } = CG;      // the red underside still drives clearance
 
-  /* --- hymenium: rides the gill-side dome, NOT an offset of the red bowl.
-     Still the Phase-1 corrugated surface; Phase 5 replaces it with blades. --- */
-  const rIn   = Math.max(0.045, stemR * 1.02);
-  const tIn   = clamp(rIn / capR, 0.04, 0.5);
-  const gInset = 0.012 + capR * 0.010;            // sits just under the flesh
-  const NG    = Math.max(14, Math.round(22 * Q));
-  const gProf = [];
-  for (let j = 0; j <= NG; j++){
-    const t = tIn + (0.965 - tIn) * (j / NG);     // stop short so the lip shows
-    gProf.push(new THREE.Vector2(capR * t, CG.gillY(t) - gInset));
-  }
-  const gillGeo = revolve(gProf, capSegs);
-  const FINS = Math.max(60, Math.round(capSegs / 3));
-  const amp  = Math.min(0.030, 0.005 + capR * 0.0065);
-  {
-    const p = gillGeo.attributes.position;
-    for (let i = 0; i < p.count; i++){
-      const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
-      const rr = Math.hypot(px, pz); if (rr < 1e-4) continue;
-      const th = Math.atan2(px, pz);
-      const finIndex = Math.floor(((th / (Math.PI * 2)) % 1 + 1) % 1 * FINS);
-      const isLong   = (finIndex % 2) === 0;
-      const fade = isLong ? 1 : clamp((rr - rIn) / ((capR - rIn) * 0.36), 0, 1);
-      const d = amp * (isLong ? 1 : 0.62) * fade * Math.sin(th * FINS);
-      const { sc, dy } = capWarp(th, rr);
-      p.setX(i, (px + d * px / rr) * sc);
-      p.setZ(i, (pz + d * pz / rr) * sc);
-      p.setY(i, py + d * 0.30 + dy);
-    }
-    gillGeo.computeVertexNormals();
-  }
+  /* --- hymenium --- */
+  const tInG = clamp(Math.max(0.045, stemR * 1.02) / capR, 0.06, 0.40);
+  const gillGeo = buildHymenium({ capR, CG, capWarp, tIn: tInG, phase });
+  const rIn = capR * tInG;
 
   /* --- veil plaques: silhouette relief on top of the baked crust.  Placed by
          REJECTION SAMPLING the same field the texture uses, so the geometry

@@ -87,6 +87,10 @@ Measure with a `scene.traverse` sum rather than `renderer.info`, which the compo
   notch, weighted `(r/R)^1.5` so the stipe attachment stays put.
 - **The cap texture is painted along `v` across the whole cross-section**, giving the four-band
   margin: red skin → thin hard dark line → cream lip → mauve gill-side flesh.
+- **`buildHymenium()`** builds the gill blades as one merged `BufferGeometry` per cap.
+  Deliberately NOT instanced: the cap warp varies along a blade's own length and an instance
+  matrix cannot express that. Any new surface that must stay glued to the cap has to call the
+  same `capWarp(th, r)` closure.
 - **`crustField()` + `crustGrid()`** — the universal veil as ONE cracked crust thresholded from
   a noise field, baked into the colour and bump maps, with instanced flat-topped plaques placed
   by rejection-sampling the same field. Per-stage `{cov, scale, tang}` in `CRUST`; thresholds

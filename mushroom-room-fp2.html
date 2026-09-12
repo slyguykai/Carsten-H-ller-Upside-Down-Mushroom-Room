@@ -589,16 +589,14 @@ function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.8){
    tell that a cap was revolved; every cap in the photographs is lobed and its
    margin rises and falls.  Weighted by (r/R)^1.5 so the stipe attachment at the
    centre stays put and the margin moves most. */
-function shapeCap(geo, R, lobe, undulate){
+function shapeCap(geo, capWarp){
   const p = geo.attributes.position;
   for (let i = 0; i < p.count; i++){
     const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
     const rr = Math.hypot(px, pz); if (rr < 1e-5) continue;
-    const th = Math.atan2(px, pz);
-    const w  = Math.pow(clamp(rr / R, 0, 1), 1.5);
-    const sc = 1 + (lobe(th) - 1) * w;
+    const { sc, dy } = capWarp(Math.atan2(px, pz), rr);
     p.setX(i, px * sc); p.setZ(i, pz * sc);
-    p.setY(i, py + undulate(th) * w);
+    p.setY(i, py + dy);
   }
   geo.computeVertexNormals();
 }
@@ -646,6 +644,14 @@ function makeMushroom(cfg){
   const notchW  = 0.26 + rng() * 0.24, notchD = 0.028 + rng() * 0.026;
   const angD = (a, b) => { const d = Math.abs(a - b) % (Math.PI * 2);
                            return d > Math.PI ? Math.PI * 2 - d : d; };
+  /* The cap's margin deformation, in ONE place.  Weighted (r/R)^1.5 so the
+     stipe attachment stays put and the margin moves most.  Every surface that
+     must stay glued to the cap — flesh, gill blades, veil plaques — has to use
+     this exact function or it will drift off. */
+  const capWarp = (th, r) => {
+    const w = Math.pow(clamp(r / capR, 0, 1), 1.5);
+    return { sc: 1 + (lobe(th) - 1) * w, dy: undulate(th) * w };
+  };
   const lobe = th => 1 + lobeA * Math.sin(th * LOBES + lobePh)
                        + 0.40 * lobeA * noise2(th * 2.2, 0, phase)
                        - notchD * Math.exp(-Math.pow(angD(th, notchTh) / notchW, 2));
@@ -687,7 +693,7 @@ function makeMushroom(cfg){
   const capSegs = clamp(Math.round(capR * 340 * Q), 128, 880);
   const CG = capGeometry(capR, capH, 22, gillRise);
   const capGeo = revolve(CG.lens, capSegs, CG.uvV);
-  shapeCap(capGeo, capR, lobe, undulate);
+  shapeCap(capGeo, capWarp);
   const { y0, Rs, phiMax } = CG;      // the red underside still drives clearance
 
   /* --- hymenium: rides the gill-side dome, NOT an offset of the red bowl.
@@ -714,11 +720,10 @@ function makeMushroom(cfg){
       const isLong   = (finIndex % 2) === 0;
       const fade = isLong ? 1 : clamp((rr - rIn) / ((capR - rIn) * 0.36), 0, 1);
       const d = amp * (isLong ? 1 : 0.62) * fade * Math.sin(th * FINS);
-      const L = lobe(th), w = Math.pow(clamp(rr / capR, 0, 1), 1.5);
-      const sc = 1 + (L - 1) * w;
+      const { sc, dy } = capWarp(th, rr);
       p.setX(i, (px + d * px / rr) * sc);
       p.setZ(i, (pz + d * pz / rr) * sc);
-      p.setY(i, py + d * 0.30 + undulate(th) * w);
+      p.setY(i, py + d * 0.30 + dy);
     }
     gillGeo.computeVertexNormals();
   }
@@ -755,9 +760,8 @@ function makeMushroom(cfg){
       const r = Rs * Math.sin(phi), yy = y0 - Rs * Math.cos(phi);
       const n = new THREE.Vector3(Math.sin(phi) * Math.sin(th), -Math.cos(phi),
                                   Math.sin(phi) * Math.cos(th)).normalize();
-      const L = lobe(th), w = Math.pow(clamp(r / capR, 0, 1), 1.5);
-      const rs = 1 + (L - 1) * w;
-      pos.set(r * Math.sin(th) * rs, yy + undulate(th) * w, r * Math.cos(th) * rs)
+      const { sc: rs, dy } = capWarp(th, r);
+      pos.set(r * Math.sin(th) * rs, yy + dy, r * Math.cos(th) * rs)
          .addScaledVector(n, -0.004);
       q.setFromUnitVectors(up, n.clone().negate());   // outward = downward off the red skin
       q.multiply(new THREE.Quaternion().setFromAxisAngle(up, rng() * Math.PI * 2));

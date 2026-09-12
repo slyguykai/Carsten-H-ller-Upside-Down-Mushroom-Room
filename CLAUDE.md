@@ -71,6 +71,10 @@ Single file, numbered `/* == N. TITLE == */` banners.
 | 10 | Post — GTAO → UnrealBloom → Output |
 | 11–14 | Player, walk/collide/duck, render loop, HUD |
 
+**Measured budget** (Q=1, all 9 caps, read off the live scene — do not trust prose figures):
+scene total ~533 K triangles, of which the gill meshes are ~131 K and the cap lenses ~281 K.
+Measure with a `scene.traverse` sum rather than `renderer.info`, which the composer confuses.
+
 **Coordinates:** Blender is Z-up; three.js is Y-up. `makeMushroom` works in a local frame with
 `y = 0` at the ceiling, the cap rim at `y = -stemH`, apex at `y = -stemH - capH`.
 

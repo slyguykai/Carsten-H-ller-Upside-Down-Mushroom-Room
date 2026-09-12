@@ -92,6 +92,22 @@ A design review that drove the browser and measured pixels found several things:
   octaves rebalanced for fatter, more confluent worms.
 
 ## Then
+## Direction from the user (2026-09-12)
+
+- **The room should read like a West Village NYC gallery**, not a literal copy of the Prada
+  space. Fold into Phase 6. **Note the tension:** the reference photographs show a warm
+  terracotta floor and a slate-lavender ceiling, which is *not* a white-box NYC gallery. A
+  West Village room means white or near-white walls, pale oak or polished concrete underfoot,
+  crisp unmoulded corners, and no coving. Decide explicitly which way to go and say so —
+  going NYC means deliberately departing from the reference on floor and ceiling colour, and
+  the floor-keyed lighting will need rebalancing again because a pale floor bounces far more
+  than terracotta. The luminaire geometry (recessed splayed wells, two tubes, long axis along
+  the room, grid layout) is worth keeping either way.
+- **The mushrooms still need more work** beyond the remaining phases. Additional reference
+  photography from the web was suggested — particularly for gill structure (Phase 5), which
+  the six local photos only show from below and at a grazing angle. Nothing has been
+  downloaded; that needs the user's go-ahead.
+
 ## Open / unverified
 - Rendering is now verified in-browser. `?debug` exposes `window.__room.look(x,y,z,yaw,pitch)`
   for a free camera; without it the render loop pins the view to the threshold.

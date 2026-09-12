@@ -122,6 +122,17 @@ A design review that drove the browser and measured pixels found several things:
 - Unresolved from the photos: whether gills are truly free of the stipe, and what the
   through-holes in the largest caps are (rigging access vs. sculptural intent).
 
+## Web reference photography
+
+`reference-web/` (gitignored) holds four Wikimedia Commons photographs of real
+*Amanita muscaria*, with provenance in `reference-web/SOURCES.txt`. `w1_gills_macro.jpg` is
+the important one — a macro of the gills edge-on, which the six Prada photographs never show.
+
+It settled an open question: **the gills are FREE** — they do not reach the stipe. Sources
+also confirm crowded lamellae with short intermediate lamellulae and a minutely powdery gill
+edge. Remember these show the ORGANISM; the project recreates the painted SCULPTURE, so use
+them for structure and the Prada photos for colour and stylisation.
+
 ## Regenerating the reference crops
 Scratchpad crops are gone with the session. Recreate from the photo folder with:
 `sips -c <h> <w> --cropOffset <y> <x> <src>.jpg --out crop.jpg` (photos are 3072x4096).

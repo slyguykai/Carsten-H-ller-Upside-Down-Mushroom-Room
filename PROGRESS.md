@@ -10,7 +10,8 @@ Fondazione Prada installation, driven by reference photography in
 - `2247634` Phase 2 — biconvex lens
 - `fd2f8dd` Phase 2 review revisions
 - `e010ba7` revolve seam, lobing, exposure
-- Phase 3 — veil crust
+- `d7062c2` Phase 3 — veil crust
+- Phase 4 + Phase 3 review fixes
 
 ## Done
 
@@ -48,18 +49,49 @@ Stage -> crust mapping lives in the `S` table (`crust:` key). Feature `scale` ha
 up substantially for mature/expanding versus the flat prototype: features render much
 coarser on the actual cap than the (theta,t) ASCII preview suggested.
 
-## Then
-- **Phase 4 — stipe.** Onion/teardrop ceiling bulb, 2-2.5x shaft, wrapped in 5-8 concentric
-  bands of recurved scales tightening downward. Separate discrete torn annulus lower down the
-  bare shaft, projecting only ~10-15% of shaft radius, ragged lower edge, sagging one side.
-  Current code models a wide drooping skirt — wrong. Lean 0-15°, not more.
-- **Phase 5 — gills.** Instanced radial blades, ~150-200, parallel-sided fins, sharp edges,
-  lamellulae only in the outer 25-35%, stopping short of the stipe at a smooth boss. Replaces
-  the corrugated revolve and is cheaper than it.
-- **Phase 6 — room.** Recessed splayed light wells, white reflector, TWO tubes each, long axis
-  along the room's length, grid layout. Terracotta floor (currently polished near-white).
-  Keep the wall gradient as a lighting result, not baked albedo.
+## Phase 4 done — the stipe
 
+- **Ceiling bulb** is now an onion: widest a third of the way down, the dome curving back
+  IN where it meets the ceiling, wrapped in 5-8 concentric bands of recurved scales that
+  tighten downward and fade over the dome. Was a spiky flaring trumpet.
+- **Annulus** is a tight torn ring on the bare shaft, ~16% projection, clean upper edge,
+  tattered lower edge, sagging one side. Was a wide drooping skirt.
+- **Shaft** is near-cylindrical with faint longitudinal fibre.
+
+**The megaphone was never the bulb.** The stem profile itself was
+`0.78 + 1.15*exp(-4.6u)` — 1.93x stemR at the ceiling against 0.85x at the cap, a 2.3x
+flare. Now `0.93 + 0.20*exp(-3.2u)`.
+
+**Stipe radius was badly over-scaled** in the inherited stage table: `r` was 0.29 of capR
+when the reference stipe is ~1/7 of the cap WIDTH, i.e. ~0.15. Everything hanging off the
+stipe (bulb, annulus) inherited the error and read as furniture.
+
+## Phase 3 review — fixes applied
+
+A design review that drove the browser and measured pixels found several things:
+
+- **Polar pinwheel.** A field evaluated in (theta, t) turns every blob near t=0 into a wedge,
+  because all theta map to the same 3D point at the pole. Fixed by evaluating the island
+  noise in **Cartesian disc coordinates** `(t*cos, t*sin)` — uniform feature size across the
+  disc, and periodicity in theta for free. *Prefer this to any pole-fade hack.*
+- **The crust grid was drawn vertically inverted** — `t=0` (apex) landed at `v=0.70` (margin).
+  This put the margin-frequency field on the converging pole and inverted the belt, which is
+  why the reviewer measured "flat coverage, no rise toward the rim". The texture rect runs
+  margin-at-top to apex-at-bottom; read the grid bottom-up.
+- **`belt` was +/-13%** and measured as noise. Now `1.16 - 0.44*t^2.2`, monotonic, with the
+  apex lift removed (the reference shows no apex concentration).
+- **Clearcoat was bleeding onto the painted crust** — skin and veil share one material, so
+  the "fully matte" crust caught specular streaks. Added a `clearcoatMap` mask keyed off the
+  same field.
+- **Plaque count starved small caps** (11-14 measured vs 40-70 intended) because of a
+  `capR/0.9` term; the reference buttons are the most densely covered of all. Floored at 30.
+- **Plaques now sample the baked grid**, not the analytic field — same function, but the two
+  discretisations disagreed enough to read as two independent scatters.
+- `CRUST.button` was dead code (never referenced by `S`); removed.
+- Plaque outline jittered off a clean polygon; mature `tang` dropped to 0.05; top isle
+  octaves rebalanced for fatter, more confluent worms.
+
+## Then
 ## Open / unverified
 - Rendering is now verified in-browser. `?debug` exposes `window.__room.look(x,y,z,yaw,pitch)`
   for a free camera; without it the render loop pins the view to the threshold.

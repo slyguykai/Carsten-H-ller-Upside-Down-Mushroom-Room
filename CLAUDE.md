@@ -105,6 +105,14 @@ Single file, numbered `/* == N. TITLE == */` banners.
   rounds of base correction; the base was already a correct 5.8° scarlet. The fault was accent
   layers at 15–22° hue stacking ~34 deep.
 - **Fixed harmonics alias into visible lattices** at texel scale. Use a hash for speckle.
+- **Never drive a surface pattern from polar (θ, t) noise.** Every blob near the pole
+  stretches into a wedge and the cap renders a pinwheel. Evaluate in Cartesian disc
+  coordinates `(t·cosθ, t·sinθ)` — uniform features, and θ-periodicity for free.
+- **Check texture orientation against the uv rect.** The crust grid was drawn inside out for
+  a whole phase: apex painted at the margin. It looked plausible enough to survive review.
+- **Suspect inherited proportions.** The stipe was 2× too thick and its profile flared 2.3×
+  toward the ceiling; both came from the original file and made every Phase 4 form read
+  wrong until they were fixed.
 
 ## Reference material
 

@@ -166,6 +166,20 @@ function revolve(profile, segs, uvV){
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
+  /* The seam column is duplicated (i = 0 and i = segs share a position), so
+     computeVertexNormals gives each a one-sided normal and every revolved
+     surface shows a visible crease down the seam.  Average them. */
+  {
+    const nr = g.attributes.normal, row = segs + 1;
+    for (let j = 0; j < n; j++){
+      const a = j * row, b = a + segs;
+      const nx = nr.getX(a) + nr.getX(b), ny = nr.getY(a) + nr.getY(b), nz = nr.getZ(a) + nr.getZ(b);
+      const L = Math.hypot(nx, ny, nz) || 1;
+      nr.setXYZ(a, nx / L, ny / L, nz / L);
+      nr.setXYZ(b, nx / L, ny / L, nz / L);
+    }
+    nr.needsUpdate = true;
+  }
   return g;
 }
 
@@ -188,7 +202,7 @@ try {
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.55;
 /* The key is at floor level, so every shadow in this room is thrown UPWARD
    onto the ceiling and walls.  That inverted shadow direction is a large part
    of the installation's character and is worth the shadow-map cost. */
@@ -484,13 +498,13 @@ function makeMushroom(cfg){
   /* The reference caps are not sine waves: each has ONE dominant asymmetric
      bite out of the margin, plus gentle rolling. */
   const notchTh = rand(0, Math.PI * 2);
-  const notchW  = 0.26 + rng() * 0.24, notchD = 0.055 + rng() * 0.050;
+  const notchW  = 0.26 + rng() * 0.24, notchD = 0.028 + rng() * 0.026;
   const angD = (a, b) => { const d = Math.abs(a - b) % (Math.PI * 2);
                            return d > Math.PI ? Math.PI * 2 - d : d; };
   const lobe = th => 1 + lobeA * Math.sin(th * LOBES + lobePh)
                        + 0.40 * lobeA * noise2(th * 2.2, 0, phase)
                        - notchD * Math.exp(-Math.pow(angD(th, notchTh) / notchW, 2));
-  const undulate = th => capR * 0.055 * lobeA / 0.04
+  const undulate = th => capR * 0.022 * lobeA / 0.04
                        * Math.sin(th * LOBES * 0.5 + undPh);
 
   /* --- stipe: curved, fibrous, swollen volva at the ceiling --- */
@@ -721,18 +735,18 @@ makeFigure(1.78,  2.1,  0.62, -2.5);
        Cool-neutral white (≈4800 K) rises from the slits; the ceilings
        catch only soft bounce, so the tops of the caps sit in shadow.
    ============================================================ */
-const hemi = new THREE.HemisphereLight(0x7f8b95, 0xfff3e2, 1.05);   // dark cool above, warm bounce below
+const hemi = new THREE.HemisphereLight(0x7f8b95, 0xfff3e2, 0.50);   // dark cool above, warm bounce below
 scene.add(hemi);
 
 SLITS_X.forEach((x, i) => {
   if (i % 2) return;                                  // one light per pair of slits
-  const l = new THREE.PointLight(0xfff6ec, 20, 9.5, 2);
+  const l = new THREE.PointLight(0xfff6ec, 10, 9.5, 2);
   l.position.set(x, 0.28, 0);
   scene.add(l);
 });
 // two soft wide fills so distant caps are not pitch black
-const f1 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f1.position.set(-1.6, 1.1, 0); scene.add(f1);
-const f2 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f2.position.set( 3.4, 1.1, 0); scene.add(f2);
+const f1 = new THREE.PointLight(0xfff2e2, 6, 13, 2); f1.position.set(-1.6, 1.1, 0); scene.add(f1);
+const f2 = new THREE.PointLight(0xfff2e2, 6, 13, 2); f2.position.set( 3.4, 1.1, 0); scene.add(f2);
 
 /* Shadow key.  Point-light shadows cost six faces each, so the casting is
    carried by two wide, heavily-penumbra'd spots aimed straight UP out of the
@@ -740,7 +754,7 @@ const f2 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f2.position.set( 3.4, 1.1, 
    the ceiling.  The point lights above stay shadowless and do the shaping. */
 if (!IS_TOUCH){
   [-5.0, 0.0, 5.0].forEach(sx => {
-    const sp = new THREE.SpotLight(0xfff6ec, 26, 11, 0.85, 0.6, 2);
+    const sp = new THREE.SpotLight(0xfff6ec, 8, 11, 0.85, 0.6, 2);
     sp.position.set(sx, 0.06, 0);
     sp.target.position.set(sx, ROOM.h, 0);
     sp.castShadow = true;
@@ -984,7 +998,7 @@ function frame(now){
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (state === 'playing') updatePlayer(dt);
-  else {
+  else if (state !== 'free'){
     player.pos.set(-6.0, 0, 0);
     camera.position.set(player.pos.x, EYE_STAND, player.pos.z);
     camera.rotation.set(player.pitch, player.yaw, 0);
@@ -1016,6 +1030,19 @@ document.getElementById('keys').innerHTML = rows.map(([k, v]) =>
 if (IS_TOUCH){
   document.getElementById('tiny').textContent = 'Left thumb walks, right thumb looks, three fingers duck.';
   document.getElementById('hint').textContent = 'duck under the big caps · look up at the gills';
+}
+
+/* ?debug exposes a free camera so the scene can be inspected without pointer
+   lock — there is no other way to verify geometry from a headless browser. */
+if (location.search.includes('debug')){
+  window.__room = { THREE, scene, camera, renderer, player, MAT,
+    look(px, py, pz, yaw, pitch = 0){
+      state = 'free';
+      camera.position.set(px, py, pz);
+      camera.rotation.set(pitch, yaw, 0);
+      panel.classList.add('gone');
+    }
+  };
 }
 
 requestAnimationFrame(() => {

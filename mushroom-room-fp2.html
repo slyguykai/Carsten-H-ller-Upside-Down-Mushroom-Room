@@ -105,6 +105,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 
 /* ============================================================
    0.  DEVICE / QUALITY            (reference: Fondazione Prada
@@ -165,6 +167,20 @@ function revolve(profile, segs, uvV){
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
+  /* The seam column is duplicated (i = 0 and i = segs share a position), so
+     computeVertexNormals gives each a one-sided normal and every revolved
+     surface shows a visible crease down the seam.  Average them. */
+  {
+    const nr = g.attributes.normal, row = segs + 1;
+    for (let j = 0; j < n; j++){
+      const a = j * row, b = a + segs;
+      const nx = nr.getX(a) + nr.getX(b), ny = nr.getY(a) + nr.getY(b), nz = nr.getZ(a) + nr.getZ(b);
+      const L = Math.hypot(nx, ny, nz) || 1;
+      nr.setXYZ(a, nx / L, ny / L, nz / L);
+      nr.setXYZ(b, nx / L, ny / L, nz / L);
+    }
+    nr.needsUpdate = true;
+  }
   return g;
 }
 
@@ -187,12 +203,17 @@ try {
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.54;
+/* The key is at floor level, so every shadow in this room is thrown UPWARD
+   onto the ceiling and walls.  That inverted shadow direction is a large part
+   of the installation's character and is worth the shadow-map cost. */
+renderer.shadowMap.enabled = !IS_TOUCH;      // no casters on touch — don't compile the permutation
+renderer.shadowMap.type = THREE.VSMShadowMap; // the only type where shadow.radius actually blurs
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xdfe0dd);
-scene.fog = new THREE.FogExp2(0xe8e6e1, 0.014);
+scene.fog = new THREE.FogExp2(0xf0ded4, 0.014);   // warm floor-bounce, not neutral haze
 
 const HFOV = 74;                                 // ≈24 mm on a 36 mm sensor
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.04, 90);
@@ -211,118 +232,397 @@ try {
   pmrem.compileEquirectangularShader();
   scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
   pmrem.dispose();
-  if ('environmentIntensity' in scene) scene.environmentIntensity = 0.22;
+  if ('environmentIntensity' in scene) scene.environmentIntensity = 0.14;
 } catch(e){ /* non fatal */ }
 
 /* ============================================================
-   4.  ROOM SHELL
-       walls: matte white plaster · ceiling: desaturated blue-grey slate
+   4.  ROOM SHELL  —  West Village gallery
+       Warm gallery white, wide-plank pale oak, plain painted ceiling.
+       A deliberate departure from Fondazione Prada's terracotta floor and
+       slate soffit.  Note the ceiling is WHITE here, not painted grey: the
+       key is at floor level, so a white ceiling renders as a dim cool grey
+       on its own.  Baking the grey into albedo would double-count it.
    ============================================================ */
-const M_WALL   = new THREE.MeshStandardMaterial({ color: 0xefede7, roughness: 0.96, metalness: 0 });
-const M_CEIL   = new THREE.MeshStandardMaterial({ color: 0x8d979f, roughness: 1.0,  metalness: 0 }); // slate
-const M_FLOOR  = new THREE.MeshStandardMaterial({ color: 0xf3f1ec, roughness: 0.30, metalness: 0 }); // polished
+function makeFloorTexture(){
+  const w = 1024, h = 1024, PLANK = 132;          // ~19 cm planks across 7 m
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  const R = mulberry32(4242), rr = (a2, b2) => a2 + R() * (b2 - a2);
+  g.fillStyle = '#d8cdb8'; g.fillRect(0, 0, w, h);
+  for (let y = 0; y < h; y += PLANK){
+    // per-plank tone: old floors are never one colour
+    const t = rr(-12, 12);
+    g.fillStyle = `rgb(${216 + t},${205 + t},${184 + t})`;
+    g.fillRect(0, y, w, PLANK);
+    // grain
+    for (let i = 0; i < 150; i++){
+      const gy = y + rr(2, PLANK - 2);
+      g.strokeStyle = `rgba(150,128,98,${rr(0.03, 0.13)})`;
+      g.lineWidth = rr(0.5, 1.8);
+      g.beginPath();
+      let x = 0; g.moveTo(0, gy);
+      while (x < w){ x += rr(60, 200); g.lineTo(x, gy + rr(-2.5, 2.5)); }
+      g.stroke();
+    }
+    // butt joints, staggered
+    let x = rr(0, 380);
+    while (x < w){
+      g.strokeStyle = 'rgba(120,100,76,0.55)'; g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(x, y + 1); g.lineTo(x, y + PLANK - 1); g.stroke();
+      x += rr(260, 520);
+    }
+    g.strokeStyle = 'rgba(116,96,72,0.62)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(2, 1);
+  t.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+  return t;
+}
 
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.d), M_FLOOR);
-floor.rotation.x = -Math.PI / 2;
-scene.add(floor);
+const M_WALL  = new THREE.MeshStandardMaterial({ color: 0xf1eee8, roughness: 0.94, metalness: 0 });
+const M_CEIL  = new THREE.MeshStandardMaterial({ color: 0xf4f2ed, roughness: 0.97, metalness: 0 });
+const M_TRIM  = new THREE.MeshStandardMaterial({ color: 0xf7f5f1, roughness: 0.62, metalness: 0 });
+const M_FLOOR = new THREE.MeshStandardMaterial({
+  map: makeFloorTexture(), color: 0xffffff, roughness: 0.42, metalness: 0
+});
+
+/* ============================================================
+   5.  FLOOR LUMINAIRES
+       Recessed wells with splayed white reflectors and two tubes each,
+       long axis running with the room, in a grid — per the reference,
+       which shows troughs, not flush emissive strips.
+   ============================================================ */
+const WELL = { w: 1.25, d: 0.30, depth: 0.10 };    // w along x, d across z
+const WELLS = [];
+for (const z of [-1.65, 1.65])
+  for (let i = 0; i < 5; i++) WELLS.push({ x: -5.4 + i * 2.7, z });
+
+/* Floor as a Shape with the wells punched out, so the troughs read as real
+   recesses rather than decals sitting on top of the boards. */
+{
+  const hw = ROOM.w / 2, hd = ROOM.d / 2;
+  const shape = new THREE.Shape();
+  shape.moveTo(-hw, -hd); shape.lineTo(hw, -hd); shape.lineTo(hw, hd);
+  shape.lineTo(-hw, hd); shape.lineTo(-hw, -hd);
+  WELLS.forEach(o => {
+    const p2 = new THREE.Path();
+    const x0 = o.x - WELL.w / 2, x1 = o.x + WELL.w / 2;
+    const y0 = o.z - WELL.d / 2, y1 = o.z + WELL.d / 2;
+    p2.moveTo(x0, y0); p2.lineTo(x0, y1); p2.lineTo(x1, y1); p2.lineTo(x1, y0); p2.lineTo(x0, y0);
+    shape.holes.push(p2);
+  });
+  const fg = new THREE.ShapeGeometry(shape);
+  // ShapeGeometry uvs are in world metres; scale them into texture space
+  const uv = fg.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 3.2, uv.getY(i) / 3.2);
+  const floor = new THREE.Mesh(fg, M_FLOOR);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+}
 
 const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.d), M_CEIL);
 ceiling.rotation.x = Math.PI / 2;
 ceiling.position.y = ROOM.h;
+ceiling.receiveShadow = true;                 // catches the upward shadows
 scene.add(ceiling);
 
 function wall(x, z, ry, span){
   const m = new THREE.Mesh(new THREE.PlaneGeometry(span, ROOM.h), M_WALL);
   m.position.set(x, ROOM.h / 2, z);
   m.rotation.y = ry;
+  m.receiveShadow = true;
   scene.add(m);
+  // painted baseboard — a townhouse-gallery tell, and it catches the floor light
+  const bh = 0.14, bt = 0.025;
+  const b = new THREE.Mesh(new THREE.BoxGeometry(span, bh, bt), M_TRIM);
+  b.position.set(x, bh / 2, z);
+  b.translateZ(bt / 2);
+  b.rotation.y = ry;
+  b.position.x += Math.sin(ry) * 0; // keep authoring simple; offset applied below
+  b.receiveShadow = true;
+  const n = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
+  b.position.add(n.multiplyScalar(bt / 2));
+  scene.add(b);
 }
 wall(0, -ROOM.d/2, 0, ROOM.w);
 wall(0,  ROOM.d/2, Math.PI, ROOM.w);
 wall(-ROOM.w/2, 0,  Math.PI/2, ROOM.d);
 wall( ROOM.w/2, 0, -Math.PI/2, ROOM.d);
 
-/* ============================================================
-   5.  FLOOR LUMINAIRE SLITS
-       11 flush transverse slots (0.16 × 2.60 m) set perpendicular to
-       the room's length, leaving a clean border of floor each side.
-       These are the PRIMARY KEY of the whole installation.
-   ============================================================ */
-const SLITS_X = [];
-const stripMat = new THREE.MeshStandardMaterial({
-  color: 0xffffff, emissive: 0xfff6ea, emissiveIntensity: 3.1, roughness: 1, metalness: 0
+/* the wells themselves: splayed reflector box + two tubes */
+const M_REFLECT = new THREE.MeshStandardMaterial({
+  color: 0xffffff, roughness: 0.86, metalness: 0, emissive: 0xfff3e2, emissiveIntensity: 0.26,
+  side: THREE.DoubleSide
 });
-{
-  const g = new THREE.PlaneGeometry(0.16, 2.60);   // x narrow, z long → transverse
-  const n = 11;
-  for (let i = 0; i < n; i++){
-    const x = -5.5 + i * 1.1;
-    SLITS_X.push(x);
-    const s = new THREE.Mesh(g, stripMat);
-    s.rotation.x = -Math.PI / 2;
-    s.rotation.z = Math.PI / 2;                       // long axis across the width
-    s.position.set(x, 0.008, 0);
-    scene.add(s);
+const M_TUBE = new THREE.MeshStandardMaterial({
+  color: 0xffffff, emissive: 0xfff6ea, emissiveIntensity: 3.4, roughness: 1, metalness: 0
+});
+WELLS.forEach(o => {
+  const hwx = WELL.w / 2, hwz = WELL.d / 2, D = WELL.depth, k = 0.70; // splay
+  const yT = -0.002, yB = -D;
+  const T = [[-hwx, hwz], [hwx, hwz], [hwx, -hwz], [-hwx, -hwz]];
+  const B = T.map(([px, pz]) => [px * k, pz * k]);
+  const v = [], idx = [];
+  T.forEach(([px, pz]) => v.push(o.x + px, yT, o.z + pz));
+  B.forEach(([px, pz]) => v.push(o.x + px, yB, o.z + pz));
+  for (let i = 0; i < 4; i++){
+    const j = (i + 1) % 4;
+    idx.push(i, j, 4 + j, i, 4 + j, 4 + i);        // splayed side
   }
-}
+  idx.push(4, 5, 6, 4, 6, 7);                      // base
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  wg.setIndex(idx); wg.computeVertexNormals();
+  scene.add(new THREE.Mesh(wg, M_REFLECT));
+
+  const tube = new THREE.CylinderGeometry(0.026, 0.026, WELL.w * 0.86, 8, 1);
+  tube.rotateZ(Math.PI / 2);
+  [-1, 1].forEach(sgn => {
+    const m = new THREE.Mesh(tube, M_TUBE);
+    m.position.set(o.x, -D * 0.42, o.z + sgn * WELL.d * 0.22);
+    scene.add(m);
+  });
+});
 
 /* ============================================================
    6.  MUSHROOM SHADERS
    ============================================================ */
 
-/* ---- cap: crimson core → orange/gold striated margin (uv.v = 1 at rim) ---- */
-function makeCapTexture(){
-  const w = 1024, h = 160;
+/* ---- the universal veil as ONE cracked crust ----------------------------
+   Not scattered warts.  A single crust thresholded from a noise field, whose
+   coverage and feature size differ per developmental stage:
+     dense fine dotting -> tangential labyrinthine ridges -> isolated plaques.
+   The reference (crops/D_crustbutton_03.jpg) shows sinuous CIRCUMFERENTIAL
+   ridges with red in the gaps, solid at the rim, widest gaps mid-cap.
+   Thresholds were calibrated by bisection to hit the target coverage; note
+   coverage is NOT monotonic with age — the smallest buttons are red with ~38%
+   fine white dotting, and no fully-white stage exists in the reference. */
+const CRUST = {
+  peppercorn: { cov: 0.38, scale: 3.40, tang: 0.12 },
+  labyrinth:  { cov: 0.50, scale: 0.95, tang: 0.72 },
+  expanding:  { cov: 0.28, scale: 1.25, tang: 0.45 },
+  mature:     { cov: 0.15, scale: 1.45, tang: 0.05 }
+};
+
+/* Angular noise that CLOSES around the cap.  noise2's internal multipliers
+   (1.7 / 3.3 / 6.1) are irrational with respect to 2*pi, so feeding it an
+   angle leaves a visible discontinuity at the revolve seam.  Integer
+   harmonics of theta are periodic by construction. */
+function pnoise(th, y, s, F){
+  return 0.55 * Math.sin(F * th + y * 0.8 + s)
+       + 0.30 * Math.sin(2 * F * th - y * 2.1 + s * 1.7)
+       + 0.15 * Math.sin(4 * F * th + y * 4.7 + s * 2.9);
+}
+const HF = n => Math.max(1, Math.round(n));
+
+/* t = 0 at the cap apex, 1 at the margin.  Signed; above the stage threshold
+   is crust.  Tangential ring term + island noise, the ring warped hard so it
+   breaks into sinuous arcs instead of perfect concentric circles.
+
+   The island noise is evaluated in CARTESIAN disc coordinates, not (theta, t).
+   In polar space a blob of fixed angular width narrows as t -> 0, so every cap
+   rendered a pinwheel of wedges converging on its centre.  Mapping to
+   (t*cos, t*sin) gives uniform feature size across the disc AND makes the
+   field periodic in theta for free, since cos/sin already are. */
+function crustField(th, t, p, seed){
+  const k  = p.scale;
+  const cx = t * Math.cos(th), cy = t * Math.sin(th);
+  const bands = (5.5 + 5.5 * t) * Math.max(0.55, k * 0.75);
+  const warp  = 3.1 * noise2(cx * 9,  cy * 9,  seed)
+              + 1.5 * noise2(cx * 18, cy * 18, seed + 7);
+  const ring  = Math.sin(t * Math.PI * bands + warp);
+  const isle  = 0.70 * noise2(cx * 11 * k, cy * 11 * k, seed + 11)
+              + 0.22 * noise2(cx * 23 * k, cy * 23 * k, seed + 29)
+              + 0.08 * noise2(cx * 47 * k, cy * 47 * k, seed + 53);
+  const field = p.tang * 0.80 * ring + (1 - 0.40 * p.tang) * isle;
+  const belt  = 1.16 - 0.44 * Math.pow(t, 2.2);   // crust concentrates at the rim
+  return field / belt;
+}
+
+/* Solve the threshold from the target coverage instead of hard-coding it:
+   the quantile is exact, survives any change to the field, and the plaque
+   placement reads back the same number the texture was painted with. */
+const CRUST_GRID = {};
+function crustGrid(stage, seed){
+  if (CRUST_GRID[stage]) return CRUST_GRID[stage];
+  const p = CRUST[stage], GW = 768, GH = 384;
+  const f = new Float32Array(GW * GH);
+  for (let y = 0; y < GH; y++){
+    const t = y / (GH - 1);
+    for (let x = 0; x < GW; x++) f[y * GW + x] = crustField(x / GW * Math.PI * 2, t, p, seed);
+  }
+  const sorted = Float32Array.from(f).sort();
+  const thr = sorted[Math.floor((1 - p.cov) * (sorted.length - 1))];
+  return (CRUST_GRID[stage] = { f, GW, GH, thr, p, seed });
+}
+
+/* ---- the cap strip, painted along v across the whole lens cross-section ----
+   v 0            red apex (hangs lowest, faces the floor)
+   v 0-.70        red skin: hot orange-scarlet, heavy low-frequency mottling
+   v .70-.765     skin deepens to crimson approaching the rim
+   v .765-.775    a thin HARD DARK LINE — the crispest edge on the sculpture
+   v .775-.84     pale cream lip
+   v .84-1        gill-side flesh, mauve-tinted (mostly hidden by lamellae)
+   The four-band margin is what the eye actually reads at duck height, and no
+   amount of geometry substitutes for it. */
+function makeCapTexture(seed, crimson = 0, crustP = null){
+  const w = 1024, h = 512;
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const g = c.getContext('2d');
+  const R = mulberry32(seed | 0), rr = (a, b) => a + R() * (b - a);
+  const yFor = v => (1 - v) * h;                 // flipY: canvas top row is v = 1
 
-  g.fillStyle = '#c2401f'; g.fillRect(0, 0, w, h);
+  // young fruit bodies sit deeper/bluer red, mature ones hotter and oranger
+  const base = crimson > 0.5 ? '#b01c15' : '#d32a18';
+  g.fillStyle = base; g.fillRect(0, yFor(0.80), w, h);
 
-  // blotchy pigment variation
-  for (let i = 0; i < 260; i++){
-    const x = rng() * w, y = rng() * h, r = rand(14, 80);
-    const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, rng() > 0.5 ? 'rgba(220,88,40,0.34)' : 'rgba(150,40,20,0.26)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = grad; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill();
+  // low-frequency pigment mottling — the reference red is never flat
+  for (let i = 0; i < 230; i++){
+    const x = R() * w, y = yFor(0.80) + R() * (h - yFor(0.80)), rad = rr(40, 190);
+    const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+    /* These blobs overlap ~34 deep, so a 'subtle' orange at 15 deg hue stacks
+       into rust.  The base is already a correct 6 deg scarlet — it was never
+       the problem.  Fewer hot blobs, and nearer red than orange. */
+    const hot = R() > 0.75;
+    gr.addColorStop(0, hot ? `rgba(208,58,26,${rr(0.06,0.14)})`
+                           : `rgba(152,28,18,${rr(0.06,0.17)})`);
+    gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, rad, 0, 6.2832); g.fill();
+  }
+  // mild orange lift toward the margin
+  const om = g.createLinearGradient(0, yFor(0.72), 0, yFor(0.58));
+  om.addColorStop(0, 'rgba(243,116,34,0.25)');
+  om.addColorStop(1, 'rgba(243,116,34,0.00)');
+  g.fillStyle = om; g.fillRect(0, yFor(0.72), w, yFor(0.58) - yFor(0.72));
+  // crimson deepening right at the rim
+  const dm = g.createLinearGradient(0, yFor(0.760), 0, yFor(0.705));
+  dm.addColorStop(0, 'rgba(138,26,18,0.32)');
+  dm.addColorStop(1, 'rgba(138,26,18,0.00)');
+  g.fillStyle = dm; g.fillRect(0, yFor(0.760), w, yFor(0.705) - yFor(0.760));
+
+  // coarse granular substrate — the reference skin has visible orange-peel tooth
+  for (let i = 0; i < 9000; i++){
+    const x = R() * w, y = yFor(0.80) + R() * (h - yFor(0.80));
+    const v = 1 - y / h;
+    const up = R() > 0.5;
+    // fade the warm grain out past v .65 so it stops cancelling the rim darkening
+    const k = up ? clamp((0.72 - v) / 0.07, 0, 1) : 1;
+    if (k <= 0) continue;
+    g.fillStyle = up ? `rgba(224,92,46,${rr(0.02,0.05) * k})` : `rgba(108,16,12,${rr(0.03,0.12)})`;
+    g.fillRect(x, y, rr(1, 3), rr(1, 3));
   }
 
-  // canvas top row = v 1 = the rim/margin: gold wash bleeding inward
-  const grd = g.createLinearGradient(0, 0, 0, h * 0.34);
-  grd.addColorStop(0.00, 'rgba(232,150,62,0.98)');
-  grd.addColorStop(0.35, 'rgba(214,102,44,0.62)');
-  grd.addColorStop(1.00, 'rgba(194,64,31,0.00)');
-  g.fillStyle = grd; g.fillRect(0, 0, w, h * 0.34);
+  // fine hairline striations, marginal zone only
+  for (let i = 0; i < 1400; i++){
+    const x = R() * w, y0 = yFor(0.70);
+    g.strokeStyle = `rgba(122,26,16,${rr(0.04, 0.13)})`;
+    g.lineWidth = rr(0.7, 1.8);
+    g.beginPath(); g.moveTo(x, y0); g.lineTo(x + rr(-2, 2), y0 - rr(0.02, 0.06) * h); g.stroke();
+  }
 
-  // striations in the marginal zone
+  g.fillStyle = '#2a1008'; g.fillRect(0, yFor(0.778), w, yFor(0.760) - yFor(0.778)); // dark line: ~9px, survives mips
+  g.fillStyle = '#e8dcc4'; g.fillRect(0, yFor(0.832), w, yFor(0.778) - yFor(0.832)); // cream lip
+  g.fillStyle = '#c8bcbe'; g.fillRect(0, 0, w, yFor(0.832));                          // mauve flesh
+
+  // the lip and flesh are cast plaster, not clean paint
   for (let i = 0; i < 900; i++){
-    const x = (i + rng() * 0.8) / 900 * w;
-    g.strokeStyle = `rgba(255,228,182,${0.06 + rng() * 0.16})`;
-    g.lineWidth = 1.0 + rng() * 1.4;
-    const len = h * (0.10 + rng() * 0.10);
-    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, len); g.stroke();
+    const x = R() * w, y = R() * yFor(0.778);
+    g.fillStyle = `rgba(${R()>0.5?120:250},${R()>0.5?110:242},${R()>0.5?112:228},${rr(0.05,0.22)})`;
+    g.fillRect(x, y, rr(1, 4), rr(1, 3));
+  }
+  /* --- lay the veil crust over the red skin (v 0 .. .70 == apex .. margin) ---
+     Evaluated on a coarse grid and scaled up: a per-pixel evaluation is ~16
+     sines per texel and would cost seconds at page load. */
+  const bc = document.createElement('canvas'); bc.width = w; bc.height = h;
+  const bg2 = bc.getContext('2d');
+  bg2.fillStyle = '#808080'; bg2.fillRect(0, 0, w, h);          // neutral = no relief
+  // clearcoat lives on the same material as the skin, so the chalky veil was
+  // picking up specular streaks. Mask the coat off wherever crust is painted.
+  const cc = document.createElement('canvas'); cc.width = w; cc.height = h;
+  const cg2 = cc.getContext('2d');
+  cg2.fillStyle = '#ffffff'; cg2.fillRect(0, 0, w, h);
+  if (crustP){
+    const { f, GW, GH, thr } = crustP;
+    const col = document.createElement('canvas'); col.width = GW; col.height = GH;
+    const bmp = document.createElement('canvas'); bmp.width = GW; bmp.height = GH;
+    const cx2 = col.getContext('2d'), bx2 = bmp.getContext('2d');
+    const ck = document.createElement('canvas'); ck.width = GW; ck.height = GH;
+    const kx2 = ck.getContext('2d');
+    const ci = cx2.createImageData(GW, GH), bi = bx2.createImageData(GW, GH),
+          ki = kx2.createImageData(GW, GH);
+    for (let yy = 0; yy < GH; yy++){
+      /* The destination rect runs v 0.70 (top) -> v 0 (bottom), i.e. margin to
+         apex, while the grid is indexed by t = 0 at the apex.  Read it
+         bottom-up or the whole crust lands inside out — which put the
+         margin-frequency field on the cap's converging pole and inverted the
+         belt's rim concentration. */
+      const gy  = GH - 1 - yy;
+      const t01 = gy / (GH - 1);
+      for (let xx = 0; xx < GW; xx++){
+        const i4 = (yy * GW + xx) * 4;
+        const e  = clamp((f[gy * GW + xx] - thr) / 0.045, 0, 1);   // narrow shoulder: crisp edge
+        ci.data[i4 + 3] = Math.round(255 * e);
+        let hsh = (xx * 374761393 + yy * 668265263) | 0;
+        hsh = (hsh ^ (hsh >> 13)) * 1274126177 | 0;
+        const spk = 0.88 + 0.12 * (((hsh ^ (hsh >> 16)) >>> 0) / 4294967296);
+        ci.data[i4]     = Math.round(222 * spk);
+        ci.data[i4 + 1] = Math.round(213 * spk);
+        ci.data[i4 + 2] = Math.round(196 * spk);
+        const v = 118 + 120 * e;
+        bi.data[i4] = bi.data[i4 + 1] = bi.data[i4 + 2] = v; bi.data[i4 + 3] = 255;
+        const kv = Math.round(255 * (1 - e));
+        ki.data[i4] = ki.data[i4 + 1] = ki.data[i4 + 2] = kv; ki.data[i4 + 3] = 255;
+      }
+    }
+    cx2.putImageData(ci, 0, 0); bx2.putImageData(bi, 0, 0); kx2.putImageData(ki, 0, 0);
+    g.imageSmoothingEnabled = true; bg2.imageSmoothingEnabled = true; cg2.imageSmoothingEnabled = true;
+    g.drawImage(col, 0, yFor(0.70), w, yFor(0) - yFor(0.70));
+    bg2.drawImage(bmp, 0, yFor(0.70), w, yFor(0) - yFor(0.70));
+    cg2.drawImage(ck, 0, yFor(0.70), w, yFor(0) - yFor(0.70));
   }
 
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
   t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  return t;
+  const b = new THREE.CanvasTexture(bc);
+  b.wrapS = THREE.RepeatWrapping; b.wrapT = THREE.ClampToEdgeWrapping;
+  b.anisotropy = t.anisotropy;
+  const k = new THREE.CanvasTexture(cc);
+  k.wrapS = THREE.RepeatWrapping; k.wrapT = THREE.ClampToEdgeWrapping;
+  k.anisotropy = t.anisotropy;
+  return { map: t, bump: b, coat: k };
+}
+
+const CAP_MATS = {};
+/* One material per developmental stage: the crust is baked into the map, so
+   the stage — not a random variant index — is what distinguishes them. */
+function capMaterial(stage, crimson){
+  if (!CAP_MATS[stage]){
+    const tex = makeCapTexture(9001 + stage.length * 7717, crimson,
+                               CRUST[stage] ? crustGrid(stage, 3.7) : null);
+    CAP_MATS[stage] = new THREE.MeshPhysicalMaterial({
+      map: tex.map, bumpMap: tex.bump, bumpScale: 0.9, clearcoatMap: tex.coat, color: 0xffffff,
+      roughness: 0.64, metalness: 0.0, clearcoat: 0.12, clearcoatRoughness: 0.46,
+      side: THREE.DoubleSide
+    });
+  }
+  return CAP_MATS[stage];
 }
 
 const MAT = {
   /* semi-gloss satin + a faint coat, per the sculpture's finish */
-  cap : new THREE.MeshPhysicalMaterial({
-    map: makeCapTexture(), color: 0xffffff, roughness: 0.42, metalness: 0.0,
-    clearcoat: 0.30, clearcoatRoughness: 0.38, side: THREE.DoubleSide
-  }),
   /* chalky, near-zero specular, warm ivory — the universal-veil warts */
-  wart : new THREE.MeshStandardMaterial({ color: 0xefe6d6, roughness: 0.96, metalness: 0, flatShading: true }),
+  wart : new THREE.MeshStandardMaterial({ color: 0xd8cdb6, roughness: 1.0, metalness: 0 }),
   /* thin, translucent lamellae: a touch of self-illumination fakes the SSS
      glow as the floor light is transmitted through the tissue */
   gill : new THREE.MeshStandardMaterial({
-    color: 0xefe4d2, roughness: 0.74, metalness: 0, side: THREE.DoubleSide,
-    emissive: 0x4a3520, emissiveIntensity: 0.42
+    color: 0xc9beb6, roughness: 0.82, metalness: 0, side: THREE.DoubleSide,
+    emissive: 0x35291f, emissiveIntensity: 0.22
   }),
   stem : new THREE.MeshStandardMaterial({ color: 0xe7e0d3, roughness: 0.88, metalness: 0, side: THREE.DoubleSide }),
   veil : new THREE.MeshStandardMaterial({ color: 0xe9e1d1, roughness: 0.90, metalness: 0, side: THREE.DoubleSide }),
@@ -336,14 +636,194 @@ const MAT = {
        convex red surface faces the floor, the gills face the ceiling.
        Local frame: y = 0 at the ceiling, y = -stemH at the cap rim.
    ============================================================ */
-const WART_GEO = (() => {                       // low-poly polygonal chunk
-  const g = new THREE.ConeGeometry(1, 1, 5, 1);
-  g.translate(0, 0.5, 0);                       // base sits on y = 0
+/* The pileus is a BICONVEX LENS, not a shell.  Rim at y = 0.
+   The red skin bulges DOWN to -H; the gill-side envelope bulges UP to +T with
+   a flatter, flat-topped profile (reference: crops/E_capedge_05.jpg, where the
+   silhouette gap is widest at the stipe and closes to a knife edge at the rim).
+   The earlier code offset the gill surface a constant distance inside the red
+   bowl, so both faces bulged the same way — the single biggest form error.
+
+   `lens` is one closed profile running red-apex -> margin -> gill-apex, with
+   explicit uvV so the cap texture can paint the four-band margin along v.
+   Direct analogue of cap_geometry() in blender-mushroom-room.py. */
+function capGeometry(R, H, rings = 22, gillRise = 0.48, gillFlat = 2.8){
+  const y0     = (R * R - H * H) / (2 * H);     // sphere centre, above the rim
+  const Rs     = y0 + H;
+  const phiMax = Math.atan2(R, y0);
+  const T      = H * gillRise;                  // how far the gill dome rises
+
+  const red = [];                               // apex -> margin
+  for (let j = 0; j <= rings; j++){
+    const phi = phiMax * (j / rings);
+    red.push(new THREE.Vector2(Rs * Math.sin(phi), y0 - Rs * Math.cos(phi)));
+  }
+  const gillY = t => T * (1 - Math.pow(t, gillFlat));
+  const gill = [];                              // margin -> apex
+  for (let j = rings; j >= 0; j--) gill.push(new THREE.Vector2(R * (j / rings), gillY(j / rings)));
+
+  // closed lens: drop the shared margin point from each face, bridge with a rim roll
+  const lipH = Math.max(0.012, R * 0.014);
+  const lens = red.slice(0, rings).concat([
+    new THREE.Vector2(R * 0.998, -lipH * 0.45),
+    new THREE.Vector2(R,          0),
+    new THREE.Vector2(R * 0.998,  lipH * 0.45)
+  ], gill.slice(1));
+
+  /* v bands: 0-.70 red skin | .70-.80 the rim roll | .80-1 gill-side flesh */
+  const uvV = [];
+  let arc = 0; const redLen = [];
+  for (let j = 0; j < rings; j++){
+    if (j) arc += red[j].distanceTo(red[j - 1]);
+    redLen.push(arc);
+  }
+  const redTot = redLen[redLen.length - 1] || 1;
+  redLen.forEach(a => uvV.push(0.70 * a / redTot));
+  uvV.push(0.722, 0.760, 0.800);
+  for (let j = 1; j <= rings; j++) uvV.push(0.82 + 0.18 * ((j - 1) / (rings - 1)));
+
+  return { lens, uvV, red, gill, gillY, gillFlat, y0, Rs, phiMax, T };
+}
+
+/* Break the surface of revolution.  A perfectly circular rim is the loudest
+   tell that a cap was revolved; every cap in the photographs is lobed and its
+   margin rises and falls.  Weighted by (r/R)^1.5 so the stipe attachment at the
+   centre stays put and the margin moves most. */
+/* ---- hymenium: real lamellae -------------------------------------------
+   Replaces a sine-corrugated surface of revolution, which topologically
+   cannot open a gap between blades and so could never self-shadow.
+
+   Built as ONE merged BufferGeometry per cap, not an InstancedMesh: the cap's
+   margin warp is (r/capR)^1.5, which varies ALONG a single blade's own length,
+   and an instance matrix is a single affine transform — instanced blades would
+   float off the flesh at the margin or tear away at the hub.
+
+   Structure follows the reference: depth ~5% of cap radius (a blade is a thin
+   plate, not a canyon wall), deepest at mid-to-outer-mid radius and tapering to
+   nothing at both ends, free of the stipe, and tiered — long gills throughout,
+   one lamellula between each pair over the outer two-thirds, and a third
+   shorter tier inserting near the rim, giving 1-1 at mid-radius and ~1-3-1 at
+   the margin.  Lamellulae end BLINDLY at a point rather than forking. */
+function buildHymenium({ capR, CG, capWarp, tIn, phase }){
+  const R = capR, T = CG.T, P = CG.gillFlat, tOut = 0.975;
+  const maxD  = R * 0.05;                        // measured, not guessed
+  const halfT = 0.0022 + R * 0.0009;             // absolute metres: an angular
+                                                 // fraction lets the notch pinch
+                                                 // neighbours into each other
+  const NL = clamp(Math.round(58 * Math.pow(R / 1.4, 0.35) * Q), 18, 68);
+  const tiers = [
+    { n: NL,     off: 0.00, tS: tIn + 0.01, rings: Math.max(5, Math.round(10 * Q)), amp: 1.00 },
+    { n: NL,     off: 0.50, tS: 0.33,       rings: Math.max(4, Math.round(7  * Q)), amp: 0.92 }
+  ];
+  if (!IS_TOUCH) tiers.push({ n: NL * 2, off: 0.25, tS: 0.70, rings: 4, amp: 0.78 });
+
+  const domeN = t => {                           // dome normal in the (r, y) plane
+    const nr = T * P * Math.pow(Math.max(t, 1e-4), P - 1) / R;
+    const L = Math.hypot(nr, 1);
+    return [nr / L, 1 / L];
+  };
+  const depthAt = (t, tS, amp) => {
+    const local = clamp((t - tS) / 0.06, 0, 1);                   // blind end -> point
+    const rise  = clamp((t - tIn) / (0.26 - tIn), 0, 1);          // full depth sooner:
+                                                                  // the free collar is
+                                                                  // 10-15% of R, not 30%
+    const fall  = Math.pow(clamp((tOut - t) / (tOut - 0.66), 0, 1), 0.55);
+    return maxD * amp * local * rise * fall;
+  };
+
+  const pos = [], idx = [];
+  const rnd = mulberry32(1337 + Math.round(phase * 1000));
+  for (const tier of tiers){
+    const step = Math.PI * 2 / tier.n;
+    for (let b = 0; b < tier.n; b++){
+      const th0   = (b + tier.off) * step + (rnd() - 0.5) * step * 0.22;  // uneven spacing
+      const wob   = (rnd() - 0.5) * step * 0.30;                          // blades wander
+      const eSeed = rnd() * 10;
+      const rings = tier.rings;
+      const C = [[], [], [], []];
+      for (let j = 0; j <= rings; j++){
+        const u = j / rings;
+        const t = tier.tS + (tOut - tier.tS) * u;
+        const th = th0 + wob * Math.sin(u * Math.PI);
+        const r  = R * t;
+        const { sc, dy } = capWarp(th, r);       // the SAME warp the flesh uses
+        const rr = r * sc, y = CG.gillY(t) + dy;
+        const [nr, ny] = domeN(t);
+        const st = Math.sin(th), ct = Math.cos(th);
+        const n3 = [nr * st, ny, nr * ct];
+        const d  = depthAt(t, tier.tS, tier.amp)
+                 * (0.90 + 0.10 * Math.sin(u * 9 + eSeed));       // edge micro-irregularity
+        const hw  = halfT * (0.45 + 0.55 * Math.min(1, (t - tier.tS) / 0.05));
+        const hwT = hw * 0.55;                   // blunt, not knife-edged: it is cast plaster
+        const px = rr * st, pz = rr * ct;
+        const em = R * 0.004;                    // embed the root INTO the flesh
+        const rx = px - n3[0] * em, ry = y - n3[1] * em, rz = pz - n3[2] * em;
+        const tx = px + n3[0] * d,  ty = y + n3[1] * d,  tz = pz + n3[2] * d;
+        C[0].push([rx - ct * hw,  ry, rz + st * hw]);
+        C[1].push([rx + ct * hw,  ry, rz - st * hw]);
+        C[2].push([tx + ct * hwT, ty, tz - st * hwT]);
+        C[3].push([tx - ct * hwT, ty, tz + st * hwT]);
+      }
+      /* Four separate face strips.  Sharing vertices around the cross-section
+         would average the corner normals and turn the crisp edge to mush; each
+         strip owning its own vertices keeps corners hard while staying smooth
+         along the blade's length. */
+      for (let f = 0; f < 4; f++){
+        const A = C[f], B = C[(f + 1) % 4], s0 = pos.length / 3;
+        for (let j = 0; j <= rings; j++){
+          pos.push(A[j][0], A[j][1], A[j][2], B[j][0], B[j][1], B[j][2]);
+        }
+        for (let j = 0; j < rings; j++){
+          const a = s0 + j * 2;
+          idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+function shapeCap(geo, capWarp){
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++){
+    const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
+    const rr = Math.hypot(px, pz); if (rr < 1e-5) continue;
+    const { sc, dy } = capWarp(Math.atan2(px, pz), rr);
+    p.setX(i, px * sc); p.setZ(i, pz * sc);
+    p.setY(i, py + dy);
+  }
+  geo.computeVertexNormals();
+}
+
+const WART_GEO = (() => {
+  /* Top radius > base radius gives the UNDERCUT seen at full resolution in
+     crops/V3_annulus_06.jpg — the plaque overhangs the skin and casts a hard
+     line at its edge.  Flat-topped, not conical. */
+  const SIDES = 15;
+  const g = new THREE.CylinderGeometry(1.0, 0.78, 1, SIDES, 1);
+  g.translate(0, 0.5, 0);
+  /* Jitter the outline once: the reference plaques have fractal, lichen-map
+     edges with no straight runs. Instances share this and are randomly rolled. */
+  const jr = mulberry32(51501), amp = [];
+  for (let i = 0; i <= SIDES; i++) amp.push(0.70 + jr() * 0.52);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++){
+    const x = pos.getX(i), z = pos.getZ(i);
+    const rr = Math.hypot(x, z); if (rr < 1e-6) continue;
+    const a = (Math.atan2(x, z) / (Math.PI * 2) + 1) % 1;
+    const k = amp[Math.round(a * SIDES) % SIDES];
+    pos.setX(i, x * k); pos.setZ(i, z * k);
+  }
+  g.computeVertexNormals();
   return g;
 })();
 
 function makeMushroom(cfg){
-  const { x, z, capR, capH, stemH, stemR, bend = 0, tiltX = 0, tiltZ = 0 } = cfg;
+  const { x, z, capR, capH, stemH, stemR, bend = 0, tiltX = 0, tiltZ = 0,
+          gillRise = 0.48 } = cfg;
   const grp = new THREE.Group();
   grp.position.set(x, ROOM.h, z);
   grp.rotation.set(tiltX, rand(0, Math.PI * 2), tiltZ);
@@ -351,10 +831,29 @@ function makeMushroom(cfg){
   const phase = rand(0, 20);
   const rimY  = -stemH;
 
-  /* --- spherical bowl parameters (rim at 0, apex at -capH) --- */
-  const y0     = (capR * capR - capH * capH) / (2 * capH);
-  const Rs     = y0 + capH;
-  const phiMax = Math.atan2(capR, y0);
+  /* --- per-specimen margin identity: no two caps share an outline --- */
+  const LOBES  = 9 + Math.floor(rng() * 4);             // 9-12 lobes
+  const lobeA  = 0.030 + rng() * 0.020;                 // 3-5% of the radius
+  const lobePh = rand(0, Math.PI * 2), undPh = rand(0, Math.PI * 2);
+  /* The reference caps are not sine waves: each has ONE dominant asymmetric
+     bite out of the margin, plus gentle rolling. */
+  const notchTh = rand(0, Math.PI * 2);
+  const notchW  = 0.26 + rng() * 0.24, notchD = 0.028 + rng() * 0.026;
+  const angD = (a, b) => { const d = Math.abs(a - b) % (Math.PI * 2);
+                           return d > Math.PI ? Math.PI * 2 - d : d; };
+  /* The cap's margin deformation, in ONE place.  Weighted (r/R)^1.5 so the
+     stipe attachment stays put and the margin moves most.  Every surface that
+     must stay glued to the cap — flesh, gill blades, veil plaques — has to use
+     this exact function or it will drift off. */
+  const capWarp = (th, r) => {
+    const w = Math.pow(clamp(r / capR, 0, 1), 1.5);
+    return { sc: 1 + (lobe(th) - 1) * w, dy: undulate(th) * w };
+  };
+  const lobe = th => 1 + lobeA * Math.sin(th * LOBES + lobePh)
+                       + 0.40 * lobeA * noise2(th * 2.2, 0, phase)
+                       - notchD * Math.exp(-Math.pow(angD(th, notchTh) / notchW, 2));
+  const undulate = th => capR * 0.022 * lobeA / 0.04
+                       * Math.sin(th * LOBES * 0.5 + undPh);
 
   /* --- stipe: curved, fibrous, swollen volva at the ceiling --- */
   const NS = Math.max(16, Math.round(34 * Q));
@@ -362,7 +861,7 @@ function makeMushroom(cfg){
   for (let j = 0; j <= NS; j++){
     const u = 1 - j / NS;                                  // 1 = cap end
     const y = -stemH * u;
-    let r = stemR * (0.78 + 1.15 * Math.exp(-u * 4.6) + 0.09 * Math.sin(u * 7.0));
+    let r = stemR * (0.93 + 0.20 * Math.exp(-u * 3.2) + 0.045 * Math.sin(u * 7.0));
     r *= 1 + 0.30 * Math.exp(-Math.pow((u - 1) / 0.085, 2)); // flare into the gills
     stemProfile.push(new THREE.Vector2(r, y));
   }
@@ -374,131 +873,155 @@ function makeMushroom(cfg){
       const rr = Math.hypot(px, pz); if (rr < 1e-5) continue;
       const th = Math.atan2(px, pz);
       const u  = clamp(-py / stemH, 0, 1);
-      const n  = noise2(th * 2.3, py * 1.5, phase);
-      const sc = 1 + 0.075 * n;
+      // faint longitudinal fibre, not lumps: high angular frequency, low amplitude
+      const n  = pnoise(th, py * 1.5, phase, 3) * 0.55
+               + pnoise(th, py * 0.6, phase + 4, 13) * 0.45;
+      const sc = 1 + 0.028 * n;
       // organic curvature: the stipe leans as it descends
       const dx = bend * u * u, dz = bend * 0.35 * u * u;
       p.setX(i, px * sc + dx); p.setZ(i, pz * sc + dz);
-      p.setY(i, py + 0.030 * n);
+      p.setY(i, py + 0.010 * n);
     }
     stemGeo.computeVertexNormals();
   }
   const capOffset = new THREE.Vector3(bend, 0, bend * 0.35);
 
-  /* --- pileus (a thin bowl, solid enough to read an edge at the rim) --- */
+  /* --- pileus: one closed biconvex lens --- */
   const capSegs = clamp(Math.round(capR * 340 * Q), 128, 880);
-  const NR = 22;
-  const capProfile = [];
-  for (let j = 0; j <= NR; j++){
-    const phi = phiMax * (j / NR);
-    capProfile.push(new THREE.Vector2(Rs * Math.sin(phi), y0 - Rs * Math.cos(phi)));
-  }
-  const rimT = Math.max(0.035, capR * 0.020);
-  capProfile.push(new THREE.Vector2(capR * 0.988, rimT * 0.55));
-  capProfile.push(new THREE.Vector2(capR * 0.912, rimT * 1.25));
-  const capGeo = revolve(capProfile, capSegs);
+  const CG = capGeometry(capR, capH, 22, gillRise);
+  const capGeo = revolve(CG.lens, capSegs, CG.uvV);
+  shapeCap(capGeo, capWarp);
+  const { y0, Rs, phiMax } = CG;      // the red underside still drives clearance
 
-  /* --- hymenium: radial lamellae with alternating LAMELLULAE ------------
-     Every second gill is a short one; it fades out before reaching the
-     stipe, exactly as in the reference material.                        */
-  const gOff   = 0.030 + capR * 0.007;
-  const rIn    = Math.max(0.045, stemR * 1.02);
-  const phiIn  = Math.asin(Math.min(0.999, rIn / Rs));
-  const NG     = Math.max(12, Math.round(18 * Q));
-  const gProf  = [];
-  for (let j = 0; j <= NG; j++){
-    const phi = phiIn + (phiMax - phiIn) * (j / NG);
-    const r = Rs * Math.sin(phi), y = y0 - Rs * Math.cos(phi);
-    const nx = Math.sin(phi), ny = -Math.cos(phi);
-    gProf.push(new THREE.Vector2(r - nx * gOff, y - ny * gOff));
-  }
-  const gillGeo = revolve(gProf, capSegs);
-  const FINS = Math.max(60, Math.round(capSegs / 3));
-  const amp  = Math.min(0.030, 0.005 + capR * 0.0065);
-  {
-    const p = gillGeo.attributes.position;
-    for (let i = 0; i < p.count; i++){
-      const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
-      const rr = Math.hypot(px, pz); if (rr < 1e-4) continue;
-      const th = Math.atan2(px, pz);
-      const finIndex = Math.floor(((th / (Math.PI * 2)) % 1 + 1) % 1 * FINS);
-      const isLong   = (finIndex % 2) === 0;
-      // short gills stop short of the stipe
-      const fade = isLong ? 1 : clamp((rr - rIn) / ((capR - rIn) * 0.36), 0, 1);
-      const a = amp * (isLong ? 1 : 0.62) * fade * Math.sin((th * FINS / FINS) * Math.PI * 2 * FINS / FINS + finIndex * 0);
-      const wave = Math.sin(th * FINS) ;
-      const d = a === 0 ? 0 : amp * (isLong ? 1 : 0.62) * fade * wave;
-      p.setX(i, px + d * px / rr);
-      p.setZ(i, pz + d * pz / rr);
-      p.setY(i, py + d * 0.30);
-    }
-    gillGeo.computeVertexNormals();
-  }
+  /* --- hymenium --- */
+  const tInG = clamp(Math.max(0.045, stemR * 1.02) / capR, 0.06, 0.40);
+  const gillGeo = buildHymenium({ capR, CG, capWarp, tIn: tInG, phase });
+  const rIn = capR * tInG;
 
-  /* --- universal veil: chalky pyramidal warts, densest toward the centre,
-         thinning to nothing at the margin ------------------------------- */
-  const nWarts = Math.round(rand(20, 34) * Math.min(1.7, capR / 0.9));
+  /* --- veil plaques: silhouette relief on top of the baked crust.  Placed by
+         REJECTION SAMPLING the same field the texture uses, so the geometry
+         and the painted pattern agree instead of being two unrelated scatters. --- */
+  const CG2 = crustGrid(cfg.crustStage || 'mature', 3.7);
+  const cp = CG2.p;
+  // floor the count: the capR/0.9 term starved the smallest caps (11-14 plaques
+  // measured) when the reference buttons are the MOST densely covered of all.
+  const wantW = Math.round(Math.max(30, rand(46, 78) * Math.min(1.8, capR / 0.9))
+                           * (0.35 + cp.cov));
+  const sampleGrid = (th, t) => {
+    const ix = ((Math.floor(th / (Math.PI * 2) * CG2.GW) % CG2.GW) + CG2.GW) % CG2.GW;
+    const iy = clamp(Math.round(t * (CG2.GH - 1)), 0, CG2.GH - 1);
+    return CG2.f[iy * CG2.GW + ix];
+  };
+  const wPos = [];
+  for (let guard = 0; guard < wantW * 60 && wPos.length < wantW; guard++){
+    const t  = 0.10 + 0.88 * Math.pow(rng(), 0.65);   // never at the pole
+    const th = rng() * Math.PI * 2;
+    if (sampleGrid(th, t) < CG2.thr + 0.02) continue;
+    wPos.push([th, t]);
+  }
+  const nWarts = Math.max(1, wPos.length);
   const warts = new THREE.InstancedMesh(WART_GEO, MAT.wart, nWarts);
   {
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0), sc = new THREE.Vector3(), pos = new THREE.Vector3();
     for (let i = 0; i < nWarts; i++){
-      const t  = Math.pow(rng(), 1.7);                 // biased toward the apex
-      const th = rng() * Math.PI * 2;
+      const [th, t] = wPos[i] || [rng() * Math.PI * 2, rng()];
       const phi = phiMax * t;
       const r = Rs * Math.sin(phi), yy = y0 - Rs * Math.cos(phi);
-      const n = new THREE.Vector3(Math.sin(phi) * Math.sin(th), -Math.cos(phi), Math.sin(phi) * Math.cos(th)).normalize();
-      pos.set(r * Math.sin(th), yy, r * Math.cos(th)).addScaledVector(n, -0.030);
-      q.setFromUnitVectors(up, n);
-      const s = capR * rand(0.035, 0.075) * (1 - 0.35 * t);
-      sc.set(s * rand(0.8, 1.3), s * rand(0.55, 1.0), s * rand(0.8, 1.3));
+      const n = new THREE.Vector3(Math.sin(phi) * Math.sin(th), -Math.cos(phi),
+                                  Math.sin(phi) * Math.cos(th)).normalize();
+      const { sc: rs, dy } = capWarp(th, r);
+      pos.set(r * Math.sin(th) * rs, yy + dy, r * Math.cos(th) * rs)
+         .addScaledVector(n, -0.004);
+      q.setFromUnitVectors(up, n.clone().negate());   // outward = downward off the red skin
+      q.multiply(new THREE.Quaternion().setFromAxisAngle(up, rng() * Math.PI * 2));
+      // flat plaques: relief ~12% of the plaque's own width
+      const sw = capR * rand(0.020, 0.052) * (0.8 + 0.5 / Math.max(0.7, cp.scale));
+      sc.set(sw * rand(0.8, 1.3), sw * rand(0.10, 0.16), sw * rand(0.8, 1.3));
       mtx.compose(pos, q, sc);
       warts.setMatrixAt(i, mtx);
     }
     warts.instanceMatrix.needsUpdate = true;
   }
 
-  /* --- partial veil (annulus): a drooping skirt around the stipe.
-         Sculpted in the inverted pose, so it hangs DOWN toward the cap. --- */
-  const veilProfile = [];
-  if (capR > 0.45){
-    for (let j = 0; j <= 9; j++){
-      const u = j / 9;
-      veilProfile.push(new THREE.Vector2(
-        stemR * (2.05 - 0.95 * u),
-        -stemH * (0.74 - 0.10 * u) - 0.02 * Math.sin(u * Math.PI)
-      ));
-    }
-  }
+  /* --- annulus: a TIGHT TORN RING on the bare shaft -----------------------
+     Not a drooping skirt.  crops/V5_annulus_06.jpg shows a narrow collar
+     projecting only ~12-18% of the shaft radius, clean along its upper edge,
+     ragged and tattered along the lower one, sagging to one side. --- */
   let veilGeo = null;
-  if (veilProfile.length){
-    veilGeo = revolve(veilProfile, Math.max(24, Math.round(capSegs / 4)));
-    const p = veilGeo.attributes.position;
-    for (let i = 0; i < p.count; i++){
-      const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
-      const rr = Math.hypot(px, pz); if (rr < 1e-4) continue;
+  if (capR > 0.45){
+    const aY   = -stemH * (0.50 + 0.10 * rng());     // roughly a third down the shaft
+    const aH   = stemR * 0.42;
+    const aR   = stemR * (1.16 + 0.06 * rng());
+    const aSag = rand(-1, 1);
+    const prof = [
+      new THREE.Vector2(stemR * 1.005, aY),
+      new THREE.Vector2(aR * 0.96,     aY - aH * 0.30),
+      new THREE.Vector2(aR,            aY - aH * 0.62),
+      new THREE.Vector2(aR * 0.93,     aY - aH * 0.88),
+      new THREE.Vector2(stemR * 1.06,  aY - aH)
+    ];
+    veilGeo = revolve(prof, Math.max(40, Math.round(96 * Q)));
+    const p2 = veilGeo.attributes.position;
+    for (let i = 0; i < p2.count; i++){
+      const px = p2.getX(i), py = p2.getY(i), pz = p2.getZ(i);
+      const rr = Math.hypot(px, pz); if (rr < 1e-5) continue;
       const th = Math.atan2(px, pz);
-      const w = 1 + 0.05 * Math.sin(th * 9 + phase);
-      p.setX(i, px * w); p.setZ(i, pz * w);
-      p.setY(i, py + 0.02 * Math.sin(th * 9 + phase));
+      // weight 0 at the clean top edge -> 1 at the torn lower edge
+      const w = clamp((aY - py) / aH, 0, 1);
+      const tatter = pnoise(th, 0, phase, 9) * 0.42 + pnoise(th, 0, phase + 3, 19) * 0.33
+                   + pnoise(th, 0, phase + 8, 41) * 0.25;
+      const sc = 1 + 0.10 * tatter * w;
+      p2.setX(i, px * sc + aSag * 0.018 * stemR * w);
+      p2.setZ(i, pz * sc);
+      p2.setY(i, py - aH * 0.30 * Math.max(0, tatter) * w * w);   // hanging tatters
     }
     veilGeo.computeVertexNormals();
   }
 
-  /* --- swollen volva + rough plaster collar at the ceiling --- */
+  /* --- the ceiling bulb: an ONION, ringed with recurved scales ------------
+     crops/C_stipe_06.jpg and B_capwarts_06.jpg: widest just under the
+     ceiling at ~2.3x the shaft, necking down into the shaft, wrapped in
+     5-8 concentric bands of small scales that tighten downward and fade out
+     over the upper dome.  The old code made a flaring spiky trumpet. --- */
+  const BULB_R = 2.15 + 0.35 * rng();                 // multiples of stemR
+  const bulbH  = stemR * (2.5 + 0.6 * rng());
+  const RINGS  = 5 + Math.floor(rng() * 4);
+  const NB = Math.max(26, Math.round(44 * Q));
   const collarProfile = [];
-  for (let j = 0; j <= 12; j++){
-    const u = j / 12;
-    collarProfile.push(new THREE.Vector2(
-      stemR * (2.55 - 1.15 * u) * (1 + 0.07 * Math.sin(u * 19 + phase)),
-      -0.62 * u - 0.06 * Math.sin(u * 5)
-    ));
+  for (let j = 0; j <= NB; j++){
+    const u = j / NB;                                  // 0 at the ceiling, 1 at the neck
+    // asymmetric: stays full against the ceiling, then necks quickly into the shaft
+    // an ONION, not a bell: the dome curves back IN where it meets the ceiling,
+    // so the widest girth sits a third of the way down (crops/C_stipe_06.jpg)
+    const sig = u < 0.34 ? 0.34 : 0.30;
+    const swell = Math.exp(-Math.pow((u - 0.34) / sig, 2));
+    let r = stemR * (1 + (BULB_R - 1) * swell);
+    // recurved scale bands: pronounced low on the bulb, absent over the dome
+    const band = Math.pow(Math.max(0, Math.sin(u * Math.PI * RINGS)), 0.45);
+    r *= 1 + 0.135 * band * clamp((u - 0.10) / 0.30, 0, 1);
+    collarProfile.push(new THREE.Vector2(r, -bulbH * u));
   }
-  const collarGeo = revolve(collarProfile, Math.max(20, Math.round(52 * Q)));
+  const collarGeo = revolve(collarProfile, Math.max(36, Math.round(72 * Q)));
+  {
+    // break the perfect rings so the scales read as overlapping flakes
+    const p3 = collarGeo.attributes.position;
+    for (let i = 0; i < p3.count; i++){
+      const px = p3.getX(i), py = p3.getY(i), pz = p3.getZ(i);
+      const rr = Math.hypot(px, pz); if (rr < 1e-5) continue;
+      const th = Math.atan2(px, pz);
+      const u  = clamp(-py / bulbH, 0, 1);
+      const n  = pnoise(th, u * 9, phase, 7) * 0.6 + pnoise(th, u * 18, phase + 5, 15) * 0.4;
+      const sc = 1 + 0.045 * n * clamp((u - 0.08) / 0.3, 0, 1);
+      p3.setX(i, px * sc); p3.setZ(i, pz * sc);
+      p3.setY(i, py + 0.012 * stemR * n);
+    }
+    collarGeo.computeVertexNormals();
+  }
 
   /* --- assemble (cap + gills ride the stipe's curvature) --- */
   const stemMesh   = new THREE.Mesh(stemGeo, MAT.stem);
-  const capMesh    = new THREE.Mesh(capGeo, MAT.cap);
+  const capMesh    = new THREE.Mesh(capGeo, capMaterial(cfg.crustStage || 'mature', cfg.crimson || 0));
   const gillMesh   = new THREE.Mesh(gillGeo, MAT.gill);
   const collarMesh = new THREE.Mesh(collarGeo, MAT.volva);
   capMesh.position.copy(capOffset);  capMesh.position.y  += rimY;
@@ -510,6 +1033,9 @@ function makeMushroom(cfg){
     veil.position.copy(capOffset);
     grp.add(veil);
   }
+  grp.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+  // warts are 1-3 cm on a 2048 map spanning ~10 m — unresolvable. GTAO seats them instead.
+  warts.castShadow = false;
 
   const rimWorld = ROOM.h - stemH;
 
@@ -529,11 +1055,15 @@ function makeMushroom(cfg){
        Four developmental stages.  Buttons stay tucked near the
        ceiling; mature cap rims hang at ~1.6 m and the apex at ~1.0 m.
    ============================================================ */
+/* h = red-skin depth as a fraction of capR; gr = how far the gill dome rises
+   as a fraction of that depth.  Total thickness / width for `mature` is
+   (0.30 + 0.30*0.45) / 2 = 22%, against ~33% before — the earlier caps were
+   half again too fat for their width (reference: crops/E_capedge_05.jpg). */
 const S = {                                     // stage → proportions
-  button        : { h: 1.10, r: 0.30 },
-  hemispherical : { h: 0.62, r: 0.26 },
-  convex        : { h: 0.46, r: 0.27 },
-  mature        : { h: 0.42, r: 0.29 }
+  button        : { h: 1.10, r: 0.34, gr: 0.85, crimson: 1, crust: 'peppercorn' },
+  hemispherical : { h: 0.62, r: 0.20, gr: 0.62, crimson: 1, crust: 'labyrinth'  },
+  convex        : { h: 0.40, r: 0.16, gr: 0.52, crimson: 0, crust: 'expanding'  },
+  mature        : { h: 0.30, r: 0.15, gr: 0.45, crimson: 0, crust: 'mature'     }
 };
 
 const PLAN = [
@@ -556,6 +1086,9 @@ PLAN.forEach(([x, z, capR, stemH, stage, bend, tiltX, tiltZ]) => {
   const m = makeMushroom({
     x, z, capR, stemH, stemR: capR * st.r,
     capH: capR * st.h * rand(0.94, 1.06),
+    gillRise: st.gr * rand(0.92, 1.08),
+    crimson: st.crimson,
+    crustStage: st.crust,
     bend, tiltX, tiltZ
   });
   scene.add(m.group);
@@ -573,6 +1106,7 @@ function makeFigure(h, x, z, ry){
                [0.20,1.12],[0.15,1.24],[0.11,1.32],[0.10,1.40],[0.085,1.46],
                [0.075,1.52],[0.03,1.56]];
   const body = new THREE.Mesh(revolve(pts.map(([r,y]) => new THREE.Vector2(r*k, y*k)), 22), MAT.body);
+  body.castShadow = true; body.receiveShadow = true;
   g.add(body);
   scene.add(g);
 }
@@ -584,27 +1118,65 @@ makeFigure(1.78,  2.1,  0.62, -2.5);
        Cool-neutral white (≈4800 K) rises from the slits; the ceilings
        catch only soft bounce, so the tops of the caps sit in shadow.
    ============================================================ */
-const hemi = new THREE.HemisphereLight(0x7f8b95, 0xfff3e2, 1.05);   // dark cool above, warm bounce below
+/* A RectAreaLight is what a recessed trough physically IS, and unlike a point
+   light it throws the elongated specular streak a satin floor should show.
+   It cannot cast shadows — which costs nothing here, because the casting was
+   already routed through the separate upward spots below. */
+RectAreaLightUniformsLib.init();
+
+const hemi = new THREE.HemisphereLight(0xdfe4ea, 0xfff1dc, 0.18);
 scene.add(hemi);
 
-SLITS_X.forEach((x, i) => {
-  if (i % 2) return;                                  // one light per pair of slits
-  const l = new THREE.PointLight(0xfff6ec, 20, 9.5, 2);
-  l.position.set(x, 0.28, 0);
+WELLS.forEach(o => {
+  const l = new THREE.RectAreaLight(0xfff4e6, IS_TOUCH ? 6.5 : 9.0, WELL.w, WELL.d);
+  l.position.set(o.x, 0.02, o.z);
+  l.rotation.x = -Math.PI / 2;                 // face straight up
   scene.add(l);
 });
-// two soft wide fills so distant caps are not pitch black
-const f1 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f1.position.set(-1.6, 1.1, 0); scene.add(f1);
-const f2 = new THREE.PointLight(0xfff2e2, 9, 13, 2); f2.position.set( 3.4, 1.1, 0); scene.add(f2);
+
+// a little wide fill so the far end of the room is not a black hole
+const f1 = new THREE.PointLight(0xfff2e2, 3.2, 13, 2); f1.position.set(-3.2, 0.9, 0); scene.add(f1);
+const f2 = new THREE.PointLight(0xfff2e2, 3.2, 13, 2); f2.position.set( 3.4, 0.9, 0); scene.add(f2);
+
+/* Shadow key.  Point-light shadows cost six faces each, so the casting is
+   carried by three wide, heavily-penumbra'd spots aimed straight UP out of the
+   floor — the cheapest way to get the installation's inverted shadows onto
+   the ceiling. */
+if (!IS_TOUCH){
+  [-5.0, 0.0, 5.0].forEach(sx => {
+    const sp = new THREE.SpotLight(0xfff6ec, 6.5, 11, 0.85, 0.6, 2);
+    sp.position.set(sx, 0.06, 0);
+    sp.target.position.set(sx, ROOM.h, 0);
+    sp.castShadow = true;
+    sp.shadow.mapSize.set(2048, 2048);
+    sp.shadow.camera.near = 0.5;
+    sp.shadow.camera.far  = ROOM.h + 1;
+    sp.shadow.bias = -0.0012;
+    sp.shadow.normalBias = 0.012;
+    sp.shadow.radius = 8;
+    sp.shadow.blurSamples = 16;
+    scene.add(sp, sp.target);
+  });
+}
 
 /* ============================================================
    10.  POST
    ============================================================ */
-let composer = null, bloomPass = null;
+let composer = null, bloomPass = null, aoPass = null;
 if (USE_BLOOM){
   try {
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
+    /* AO does more for the gills and the wart bases than any amount of extra
+       geometry — the pleat valleys have almost no other occlusion cue. */
+    try {
+      const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
+      gtao.output = GTAOPass.OUTPUT.Default;
+      gtao.updateGtaoMaterial({ radius: 0.11, distanceExponent: 1.7, thickness: 0.35,
+                                scale: 1.0, samples: 16, screenSpaceRadius: false });
+      composer.addPass(gtao);
+      aoPass = gtao;
+    } catch(e){ /* addon shape varies by build; AO is optional */ }
     bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.38, 0.70, 0.86);
     composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
@@ -761,7 +1333,7 @@ function updatePlayer(dt){
   for (const dm of domes) maxHead = Math.min(maxHead, clearanceUnder(dm, player.pos.x, player.pos.z));
 
   const wantDuck = keys['KeyC'] || keys['ControlLeft'] || keys['ControlRight'] ||
-                   keys['KeyX'] || keys['ShiftRight'] || duckTouch;
+                   keys['KeyX'] || duckTouch;
   const target = Math.min(wantDuck ? EYE_DUCK : EYE_STAND, maxHead - 0.07);
   player.eye += (clamp(target, 0.55, EYE_STAND) - player.eye) * Math.min(1, 8 * dt);
   const ducking = player.eye < EYE_STAND - 0.06;
@@ -816,7 +1388,7 @@ function frame(now){
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (state === 'playing') updatePlayer(dt);
-  else {
+  else if (state !== 'free'){
     player.pos.set(-6.0, 0, 0);
     camera.position.set(player.pos.x, EYE_STAND, player.pos.z);
     camera.rotation.set(player.pitch, player.yaw, 0);
@@ -831,6 +1403,7 @@ addEventListener('resize', () => {
   applyFov();
   renderer.setSize(w, h);
   if (composer) composer.setSize(w, h);
+  if (aoPass && aoPass.setSize) aoPass.setSize(w, h);
   if (bloomPass) bloomPass.resolution.set(w, h);
 });
 
@@ -847,6 +1420,19 @@ document.getElementById('keys').innerHTML = rows.map(([k, v]) =>
 if (IS_TOUCH){
   document.getElementById('tiny').textContent = 'Left thumb walks, right thumb looks, three fingers duck.';
   document.getElementById('hint').textContent = 'duck under the big caps · look up at the gills';
+}
+
+/* ?debug exposes a free camera so the scene can be inspected without pointer
+   lock — there is no other way to verify geometry from a headless browser. */
+if (location.search.includes('debug')){
+  window.__room = { THREE, scene, camera, renderer, player, MAT,
+    look(px, py, pz, yaw, pitch = 0){
+      state = 'free';
+      camera.position.set(px, py, pz);
+      camera.rotation.set(pitch, yaw, 0);
+      panel.classList.add('gone');
+    }
+  };
 }
 
 requestAnimationFrame(() => {

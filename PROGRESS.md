@@ -158,6 +158,25 @@ is the look the user asked for, not a defect — but if it ever feels too clinic
 are ceiling albedo and the `RectAreaLight` colour temperature, not the mushroom materials.
 
 ## Then
+## Motorised rotation
+
+The real mushrooms turn slowly on motors, and now so do these.
+
+- **Two nested groups per mushroom.** The outer pivot carries the rotation about the CEILING's
+  vertical — a motor in the soffit — and the inner group carries the tilt. Spinning the tilted
+  group directly would precess the stipe around a cone instead of turning the sculpture on its
+  mount.
+- Rates are `rand(0.045, 0.105)` rad/s in mixed directions: **60-140 s per revolution**.
+- `turnMotors()` also reads each cap's real world position back each frame to keep the duck
+  clearance and the stipe collider in step as the bent stipe sweeps its cap around. That
+  **also fixed a standing bug**: both had used the static `bend` offset and ignored the group's
+  own random yaw, so they were slightly wrong even before anything rotated.
+- Honours `prefers-reduced-motion: reduce`.
+
+Measuring the rate in the dev browser gives ~300-600 s/rev, which is an artifact: the pane runs
+at ~4-5 fps and `dt = min(0.05, ...)` then dilates time by ~4.5x. Multiply back and it matches
+the coded rate. Do not "fix" the rate from a measurement taken in a throttled pane.
+
 ## Direction from the user (2026-09-12)
 
 - **The room should read like a West Village NYC gallery**, not a literal copy of the Prada

@@ -824,9 +824,15 @@ const WART_GEO = (() => {
 function makeMushroom(cfg){
   const { x, z, capR, capH, stemH, stemR, bend = 0, tiltX = 0, tiltZ = 0,
           gillRise = 0.48 } = cfg;
+  /* Two nested groups: the outer pivot carries the motor rotation about the
+     ceiling's vertical, the inner group carries the tilt.  Spinning the tilted
+     group directly would precess the stipe around a cone instead of turning
+     the sculpture on its mount. */
+  const pivot = new THREE.Group();
+  pivot.position.set(x, ROOM.h, z);
   const grp = new THREE.Group();
-  grp.position.set(x, ROOM.h, z);
   grp.rotation.set(tiltX, rand(0, Math.PI * 2), tiltZ);
+  pivot.add(grp);
 
   const phase = rand(0, 20);
   const rimY  = -stemH;
@@ -1040,7 +1046,11 @@ function makeMushroom(cfg){
   const rimWorld = ROOM.h - stemH;
 
   return {
-    group: grp,
+    group: pivot,
+    capMesh,                       // read back each frame: it is what actually moves
+    /* One slow revolution every ~60-140 s, mixed directions.  The real
+       mushrooms turn on motors at a speed you notice only if you watch. */
+    spin: (rng() > 0.5 ? 1 : -1) * rand(0.045, 0.105),
     /* solid stipe — "stand closely between stems" */
     stemCollider: rimWorld < 2.7
       ? { x: x + bend, z: z + bend * 0.35, r: stemR * 1.30 + 0.10 }
@@ -1081,6 +1091,7 @@ const PLAN = [
 
 const stemColliders = [];
 const domes = [];
+const MOTORS = [];
 PLAN.forEach(([x, z, capR, stemH, stage, bend, tiltX, tiltZ]) => {
   const st = S[stage];
   const m = makeMushroom({
@@ -1094,6 +1105,7 @@ PLAN.forEach(([x, z, capR, stemH, stage, bend, tiltX, tiltZ]) => {
   scene.add(m.group);
   if (m.stemCollider) stemColliders.push(m.stemCollider);
   domes.push(m.dome);
+  MOTORS.push(m);
 });
 
 /* --- two dark figures, ~1.72 m, standing under the caps --- */
@@ -1382,11 +1394,31 @@ function updatePlayer(dt){
 /* ============================================================
    13.  LOOP
    ============================================================ */
+/* Respect a viewer who has asked the OS for less motion. */
+const SPIN_ON = !(window.matchMedia &&
+                  window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+const _mw = new THREE.Vector3();
+function turnMotors(dt){
+  for (const m of MOTORS){
+    if (SPIN_ON) m.group.rotation.y += m.spin * dt;
+    /* The cap hangs off the bent stipe, so it sweeps a small circle as the
+       mount turns.  Read its real world position rather than assuming the
+       static bend offset — that keeps the duck clearance and the stipe
+       collider honest, and it also corrects a standing error where both
+       ignored the group's own random yaw. */
+    m.capMesh.updateWorldMatrix(true, false);
+    m.capMesh.getWorldPosition(_mw);
+    m.dome.x = _mw.x; m.dome.z = _mw.z;
+    if (m.stemCollider){ m.stemCollider.x = _mw.x; m.stemCollider.z = _mw.z; }
+  }
+}
+
 let last = performance.now();
 function frame(now){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  turnMotors(dt);
   if (state === 'playing') updatePlayer(dt);
   else if (state !== 'free'){
     player.pos.set(-6.0, 0, 0);

@@ -131,7 +131,8 @@ only**. Most design decisions in the rebuild are only justifiable by looking at 
 
 ## Known issues
 
-- **Nothing rotates.** The real installation's mushrooms turn slowly on motors; neither track animates.
+- **The Blender track does not rotate.** The web scene now does (see `turnMotors()`); the
+  Blender scripts still render a static frame.
 - **Blender track is stale** — see above. Also: `SPOT_MESH` is assigned twice (the first mesh is
   orphaned), and the 720-segment gill revolve carrying a 240-period sine is only 3 samples per gill.
 - `README.md` is a single title line.
